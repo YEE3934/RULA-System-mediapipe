@@ -51,10 +51,9 @@ TABLE_C = [
     [4, 4, 4, 5, 6, 7, 7], [4, 4, 5, 6, 6, 7, 7], [5, 5, 6, 6, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7]
 ]
 
-# ==================== 【自動中文字型載入器 (徹底解決方框亂碼)】 ====================
+# ==================== 【自動中文字型載入器】 ====================
 @st.cache_resource
 def ensure_chinese_font():
-    """尋找系統中文字型，若無則自動下載開源中文字型至 /tmp，保證不出現方框亂碼"""
     candidates = [
         "font.ttf",
         "/tmp/chinese_font.otf",
@@ -69,14 +68,12 @@ def ensure_chinese_font():
         if os.path.exists(p):
             return p
 
-    # 搜尋 Linux /usr/share/fonts 目錄下任何支援 CJK 的字型
     if os.path.exists("/usr/share/fonts"):
         for root, _, files in os.walk("/usr/share/fonts"):
             for f in files:
                 if any(k in f.lower() for k in ["wqy", "noto", "cjk", "zenhei", "microhei", "droid"]):
                     return os.path.join(root, f)
 
-    # 若雲端環境完全沒裝字型，自動下載 Google Noto Sans TC 至 /tmp
     urls = [
         ("https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf", "/tmp/chinese_font.otf"),
         ("https://raw.githubusercontent.com/StellarCN/scp_zh/master/fonts/SimHei.ttf", "/tmp/chinese_font.ttf")
@@ -104,9 +101,10 @@ def put_chinese_text(img, text, position, color, size=18):
     if font is None:
         font = ImageFont.load_default()
     
-    # 加上黑色文字描邊/陰影，讓文字在淺色屋頂或深色背景都清晰可讀
     x, y = position
-    draw.text((x + 1, y + 1), text, fill=(0, 0, 0), font=font)
+    # 黑色描邊確保在任何背景皆清晰可見
+    for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1), (0, 1), (1, 0)]:
+        draw.text((x + dx, y + dy), text, fill=(0, 0, 0), font=font)
     draw.text((x, y), text, fill=(color[2], color[1], color[0]), font=font)
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
@@ -160,9 +158,8 @@ def render_blob_download_button(zip_bytes, filename, label_text):
     """
     components.html(html_code, height=70)
 
-# ==================== 【人因工程純 2D 矢狀面幾何計算】 ====================
+# ==================== 【幾何與人因工程計分邏輯】 ====================
 def calculate_2d_angle(a, b, c):
-    """計算以 b 為頂點，向量 ba 與 bc 在 2D 投影平面的夾角"""
     ba = np.array([a[0] - b[0], a[1] - b[1]], dtype=float)
     bc = np.array([c[0] - b[0], c[1] - b[1]], dtype=float)
     norm_ba = np.linalg.norm(ba)
@@ -172,8 +169,17 @@ def calculate_2d_angle(a, b, c):
     cosine = np.clip(np.dot(ba, bc) / (norm_ba * norm_bc), -1.0, 1.0)
     return float(np.degrees(np.arccos(cosine)))
 
+def calculate_3d_angle(a, b, c):
+    ba = np.array(a, dtype=float) - np.array(b, dtype=float)
+    bc = np.array(c, dtype=float) - np.array(b, dtype=float)
+    norm_ba = np.linalg.norm(ba)
+    norm_bc = np.linalg.norm(bc)
+    if norm_ba < 1e-5 or norm_bc < 1e-5:
+        return 0.0
+    cosine = np.clip(np.dot(ba, bc) / (norm_ba * norm_bc), -1.0, 1.0)
+    return float(np.degrees(np.arccos(cosine)))
+
 def enhance_image_for_pose(bgr_img):
-    """使用 CLAHE 強化膚色手臂、米色袋子與黑色寬袖之間的邊界對比度"""
     lab = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -195,6 +201,14 @@ def get_lower_arm_score(angle, is_across_midline=False):
     if is_across_midline: base += 1
     return min(max(base, 1), 3)
 
+def get_wrist_score(angle, is_deviated=False):
+    # RULA Step 3: 0~5度=1分, 5~15度=2分, >15度=3分; 尺偏/橈偏 +1分
+    if angle <= 5: base = 1
+    elif angle <= 15: base = 2
+    else: base = 3
+    if is_deviated: base += 1
+    return min(max(base, 1), 4)
+
 def get_neck_score(angle, is_twisted=False, is_side_bending=False):
     if angle <= 10: base = 1
     elif angle <= 20: base = 2
@@ -212,8 +226,14 @@ def get_trunk_score(angle, is_twisted=False, is_side_bending=False):
     if is_side_bending: base += 1
     return min(max(base, 1), 6)
 
-def compute_rula_side_score(ua, la, nk, tk, m_val, f_val):
-    w, wt, lg = 1, 1, 1
+def compute_rula_full(ua, la, w, wt, nk, tk, lg, m_val, f_val):
+    ua = min(max(ua, 1), 6)
+    la = min(max(la, 1), 3)
+    w  = min(max(w, 1), 4)
+    wt = min(max(wt, 1), 2)
+    nk = min(max(nk, 1), 6)
+    tk = min(max(tk, 1), 6)
+    lg = min(max(lg, 1), 2)
     score_a = TABLE_A[ua][la][w][wt]
     score_b = TABLE_B[nk][tk][lg]
     score_c = score_a + m_val + f_val
@@ -222,44 +242,129 @@ def compute_rula_side_score(ua, la, nk, tk, m_val, f_val):
     al_num = 1 if grand_score <= 2 else (2 if grand_score <= 4 else (3 if grand_score <= 6 else 4))
     return score_a, score_b, score_c, score_d, grand_score, f"AL{al_num}"
 
-# ==================== 【專屬單側人因骨架繪圖器 (不畫背面盲區與臉部雜點)】 ====================
-def draw_ergonomic_skeleton(img, ear, sh, el, wr, hp, kn, an, ang_ua, ang_la, ang_tk):
+# ==================== 【全 33 點生物力學分層渲染器 (五官 + 手掌拇指三角 + 足底三角)】 ====================
+def draw_full_biomechanical_skeleton(
+    img, pts_dict, ang_ua, ang_la, ang_wr, ang_tk, ang_nk, wt_score
+):
     """
-    只繪製受測側的乾淨人因力學鏈，並直接在關節旁標註角度，消除 33 點蜘蛛網與背後假點
+    繪製完整 33 點解剖特徵：
+    1. 臉部五官網格 (鼻、雙眼、雙耳、嘴角)
+    2. 雙側完整骨架 (對側為半透明青色輔助層，主測側為高亮力學層)
+    3. 手部精細結構 (手腕、拇指軸線、食指-小指手掌平面三角形)
+    4. 足底支撐結構 (腳踝-腳跟-腳尖支撐三角形)
     """
     out = img.copy()
-    p_ear = (int(ear[0]), int(ear[1]))
-    p_sh  = (int(sh[0]),  int(sh[1]))
-    p_el  = (int(el[0]),  int(el[1]))
-    p_wr  = (int(wr[0]),  int(wr[1]))
-    p_hp  = (int(hp[0]),  int(hp[1]))
-    p_kn  = (int(kn[0]),  int(kn[1]))
-    p_an  = (int(an[0]),  int(an[1]))
+    overlay = img.copy()
 
-    # 繪製垂直參考基準虛線 (過髖關節垂直向上)
-    cv2.line(out, p_hp, (p_hp[0], max(0, p_sh[1] - 60)), (180, 180, 180), 2, cv2.LINE_AA)
+    def to_pt(arr):
+        return (int(round(arr[0])), int(round(arr[1])))
 
-    # 1. 下肢支撐鏈 (髖 -> 膝 -> 踝) - 藍色
-    cv2.line(out, p_hp, p_kn, (255, 180, 0), 4, cv2.LINE_AA)
-    cv2.line(out, p_kn, p_an, (255, 180, 0), 4, cv2.LINE_AA)
+    # ---- 第一層：半透明色塊與對側輔助骨架 (繪製於 overlay) ----
+    # 1. 軀幹核心網格與對側肢體
+    o_sh, o_el, o_wr = to_pt(pts_dict["o_sh"]), to_pt(pts_dict["o_el"]), to_pt(pts_dict["o_wr"])
+    o_th, o_ix, o_pk = to_pt(pts_dict["o_th"]), to_pt(pts_dict["o_ix"]), to_pt(pts_dict["o_pk"])
+    o_hp, o_kn, o_an = to_pt(pts_dict["o_hp"]), to_pt(pts_dict["o_kn"]), to_pt(pts_dict["o_an"])
+    o_hl, o_ft = to_pt(pts_dict["o_hl"]), to_pt(pts_dict["o_ft"])
 
-    # 2. 軀幹與頸部主軸 (髖 -> 肩 -> 耳) - 綠色/黃色
+    # 對側上肢與手掌 (青灰色輔助線)
+    cv2.line(overlay, o_sh, o_el, (200, 180, 100), 2, cv2.LINE_AA)
+    cv2.line(overlay, o_el, o_wr, (200, 180, 100), 2, cv2.LINE_AA)
+    cv2.line(overlay, o_wr, o_th, (200, 220, 120), 2, cv2.LINE_AA)
+    cv2.polylines(overlay, [np.array([o_wr, o_ix, o_pk], dtype=np.int32)], True, (200, 180, 100), 2, cv2.LINE_AA)
+
+    # 對側下肢與足底三角
+    cv2.line(overlay, o_hp, o_kn, (200, 160, 100), 2, cv2.LINE_AA)
+    cv2.line(overlay, o_kn, o_an, (200, 160, 100), 2, cv2.LINE_AA)
+    cv2.polylines(overlay, [np.array([o_an, o_hl, o_ft], dtype=np.int32)], True, (200, 160, 100), 2, cv2.LINE_AA)
+    for p in [o_sh, o_el, o_wr, o_th, o_ix, o_pk, o_hp, o_kn, o_an, o_hl, o_ft]:
+        cv2.circle(overlay, p, 4, (220, 200, 120), -1, cv2.LINE_AA)
+
+    # 主評估側手掌三角形與足底三角形半透明填充
+    p_wr = to_pt(pts_dict["wr"])
+    p_th = to_pt(pts_dict["th"])
+    p_ix = to_pt(pts_dict["ix"])
+    p_pk = to_pt(pts_dict["pk"])
+    p_an = to_pt(pts_dict["an"])
+    p_hl = to_pt(pts_dict["hl"])
+    p_ft = to_pt(pts_dict["ft"])
+
+    palm_poly = np.array([p_wr, p_ix, p_pk], dtype=np.int32)
+    foot_poly = np.array([p_an, p_hl, p_ft], dtype=np.int32)
+    cv2.fillPoly(overlay, [palm_poly], (0, 220, 255))
+    cv2.fillPoly(overlay, [foot_poly], (255, 200, 0))
+
+    # 融合半透明圖層
+    cv2.addWeighted(overlay, 0.42, out, 0.58, 0, out)
+
+    # ---- 第二層：頭部五官解剖網格 (鼻、雙眼、雙耳、雙嘴角) ----
+    p_nose = to_pt(pts_dict["nose"])
+    p_leye = to_pt(pts_dict["l_eye"])
+    p_reye = to_pt(pts_dict["r_eye"])
+    p_lear = to_pt(pts_dict["l_ear"])
+    p_rear = to_pt(pts_dict["r_ear"])
+    p_lmou = to_pt(pts_dict["l_mouth"])
+    p_rmou = to_pt(pts_dict["r_mouth"])
+    p_ear  = to_pt(pts_dict["ear"])
+    p_sh   = to_pt(pts_dict["sh"])
+    p_el   = to_pt(pts_dict["el"])
+    p_hp   = to_pt(pts_dict["hp"])
+    p_kn   = to_pt(pts_dict["kn"])
+
+    # 繪製臉部特徵連線 (耳 -> 眼 -> 鼻、雙眼連線、嘴角連線、鼻至嘴中線)
+    cv2.line(out, p_lear, p_leye, (255, 255, 100), 2, cv2.LINE_AA)
+    cv2.line(out, p_rear, p_reye, (255, 255, 100), 2, cv2.LINE_AA)
+    cv2.line(out, p_leye, p_nose, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.line(out, p_reye, p_nose, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.line(out, p_leye, p_reye, (255, 220, 0), 2, cv2.LINE_AA)
+    cv2.line(out, p_lmou, p_rmou, (180, 100, 255), 2, cv2.LINE_AA)
+    mouth_mid = ((p_lmou[0] + p_rmou[0]) // 2, (p_lmou[1] + p_rmou[1]) // 2)
+    cv2.line(out, p_nose, mouth_mid, (0, 255, 255), 2, cv2.LINE_AA)
+
+    for fp in [p_nose, p_leye, p_reye, p_lear, p_rear, p_lmou, p_rmou]:
+        cv2.circle(out, fp, 4, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(out, fp, 3, (0, 180, 255), -1, cv2.LINE_AA)
+
+    # ---- 第三層：主評估側核心人因力學鏈 ----
+    # 垂直參考基準線 (過髖關節正上方)
+    cv2.line(out, p_hp, (p_hp[0], max(0, p_sh[1] - 70)), (190, 190, 190), 2, cv2.LINE_AA)
+
+    # 1. 下肢與足底支撐三角形 (髖 -> 膝 -> 踝 -> 跟/尖)
+    cv2.line(out, p_hp, p_kn, (255, 170, 0), 4, cv2.LINE_AA)
+    cv2.line(out, p_kn, p_an, (255, 170, 0), 4, cv2.LINE_AA)
+    cv2.polylines(out, [foot_poly], True, (255, 220, 0), 3, cv2.LINE_AA)
+
+    # 2. 軀幹與頭頸軸線 (髖 -> 肩 -> 耳 -> 鼻)
     cv2.line(out, p_hp, p_sh, (0, 230, 0), 5, cv2.LINE_AA)
     cv2.line(out, p_sh, p_ear, (0, 255, 255), 4, cv2.LINE_AA)
+    cv2.line(out, p_ear, p_nose, (0, 215, 255), 3, cv2.LINE_AA)
 
-    # 3. 上肢搬運力學鏈 (肩 -> 肘 -> 腕) - 高亮紅橘色
-    cv2.line(out, p_sh, p_el, (0, 80, 255), 5, cv2.LINE_AA)
-    cv2.line(out, p_el, p_wr, (0, 165, 255), 5, cv2.LINE_AA)
+    # 3. 上肢與手掌力學三角 (肩 -> 肘 -> 腕 + 拇指向量 + 食指/小指掌面三角)
+    cv2.line(out, p_sh, p_el, (0, 70, 255), 5, cv2.LINE_AA)
+    cv2.line(out, p_el, p_wr, (0, 150, 255), 5, cv2.LINE_AA)
+    # 手掌平面三角形 (腕 - 食指 - 小指)
+    cv2.polylines(out, [palm_poly], True, (0, 255, 255), 3, cv2.LINE_AA)
+    # 拇指獨立向量 (粉紫色高亮，用於呈現手腕翻轉方向)
+    cv2.line(out, p_wr, p_th, (255, 50, 255), 3, cv2.LINE_AA)
 
-    # 繪製關節節點 (外白圈 + 內紅點)
-    for pt in [p_ear, p_sh, p_el, p_wr, p_hp, p_kn, p_an]:
-        cv2.circle(out, pt, 8, (255, 255, 255), -1, cv2.LINE_AA)
+    # 繪製主側關鍵點節點
+    main_joints = [p_ear, p_sh, p_el, p_wr, p_hp, p_kn, p_an]
+    for pt in main_joints:
+        cv2.circle(out, pt, 7, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(out, pt, 5, (0, 0, 255), -1, cv2.LINE_AA)
 
-    # 在關節旁直接標註即時角度，方便專題報告講解
-    out = put_chinese_text(out, f"上臂:{ang_ua:.0f}°", (p_sh[0] + 12, p_sh[1] - 10), (0, 255, 255), 15)
-    out = put_chinese_text(out, f"前臂:{ang_la:.0f}°", (p_el[0] + 12, p_el[1] + 5), (0, 200, 255), 15)
-    out = put_chinese_text(out, f"軀幹:{ang_tk:.0f}°", (p_hp[0] + 12, p_hp[1] - 20), (100, 255, 100), 15)
+    # 繪製手部與足部端點節點 (拇指、食指、小指、腳跟、腳尖)
+    extremity_joints = [p_th, p_ix, p_pk, p_hl, p_ft]
+    for pt in extremity_joints:
+        cv2.circle(out, pt, 6, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(out, pt, 4, (255, 0, 200), -1, cv2.LINE_AA)
+
+    # 標註各關節即時角度與手腕扭轉狀態
+    twist_str = "極端扭轉(2分)" if wt_score == 2 else "中立(1分)"
+    out = put_chinese_text(out, f"頸部:{ang_nk:.0f}°", (p_ear[0] + 12, max(10, p_ear[1] - 12)), (255, 255, 120), 14)
+    out = put_chinese_text(out, f"上臂:{ang_ua:.0f}°", (p_sh[0] + 12, p_sh[1] - 8), (0, 255, 255), 14)
+    out = put_chinese_text(out, f"前臂:{ang_la:.0f}°", (p_el[0] + 12, p_el[1] + 2), (0, 200, 255), 14)
+    out = put_chinese_text(out, f"手腕:{ang_wr:.0f}°|{twist_str}", (p_wr[0] + 12, p_wr[1] + 5), (255, 160, 255), 14)
+    out = put_chinese_text(out, f"軀幹:{ang_tk:.0f}°", (p_hp[0] + 12, p_hp[1] - 15), (100, 255, 100), 14)
     return out
 
 # ==================== 【正面鏡頭：冠狀面/水平面補正分析】 ====================
@@ -290,110 +395,169 @@ def analyze_front_camera(frame, pose_model, target_side):
     
     shoulder_tilt = abs(lm[11].y - lm[12].y)
     is_trunk_side_bending = shoulder_tilt > 0.08
+
+    # 正面視角檢測頭部/頸部是否明顯側轉或側傾
+    ear_diff_y = abs(lm[7].y - lm[8].y)
+    is_neck_side_bending = ear_diff_y > shoulder_width * 0.18
     
     mods = {
         "is_abducted": is_abducted,
         "is_across_midline": is_across_midline,
-        "is_side_bending": is_trunk_side_bending
+        "is_side_bending": is_trunk_side_bending,
+        "is_neck_side_bending": is_neck_side_bending
     }
     return True, mods
 
-# ==================== 【側視角鏡頭：高解析 + 解剖校正 + 純 2D 矢狀面量測】 ====================
+# ==================== 【側視角鏡頭：33 點全解剖擷取與 RULA 全矩陣解算】 ====================
 def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val):
     orig_h, orig_w = frame.shape[:2]
-    # 保持直式/橫式高解析度 (長邊 1000px)，避免手部與袋子糊在一起
     scale = min(1000 / max(orig_h, orig_w), 1.0)
     work_w, work_h = int(orig_w * scale), int(orig_h * scale)
     frame_work = cv2.resize(frame, (work_w, work_h))
     
-    # 強化影像邊緣對比度後再送入 MediaPipe
     enhanced_bgr = enhance_image_for_pose(frame_work)
     img_rgb = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
     results = pose_model.process(img_rgb)
     
-    if not results.pose_landmarks:
+    if not results.pose_landmarks or not results.pose_world_landmarks:
         return False, None, frame_work, 0.0
         
     n_lm = results.pose_landmarks.landmark
+    w_lm = results.pose_world_landmarks.landmark
     
     try:
-        # 取得像素座標輔助函式
         def pt2d(idx):
             return np.array([n_lm[idx].x * work_w, n_lm[idx].y * work_h], dtype=float)
 
+        def pt3d(idx):
+            return np.array([w_lm[idx].x, w_lm[idx].y, w_lm[idx].z], dtype=float)
+
+        # 定義主評估側與對側之 33 點索引 (含五官、手腕三指、足部三點)
         if target_side == "右手側":
-            t_ear, t_sh, t_el, t_wr, t_hp, t_kn, t_an = 8, 12, 14, 16, 24, 26, 28
-            o_ear, o_sh, o_el, o_wr, o_hp = 7, 11, 13, 15, 23
-            # 右手掌延伸點 (食指20 / 拇指22)
-            t_index, o_index = 20, 19
+            t_ear, t_sh, t_el, t_wr, t_pk, t_ix, t_th = 8, 12, 14, 16, 18, 20, 22
+            t_hp, t_kn, t_an, t_hl, t_ft = 24, 26, 28, 30, 32
+            o_ear, o_sh, o_el, o_wr, o_pk, o_ix, o_th = 7, 11, 13, 15, 17, 19, 21
+            o_hp, o_kn, o_an, o_hl, o_ft = 23, 25, 27, 29, 31
         else:
-            t_ear, t_sh, t_el, t_wr, t_hp, t_kn, t_an = 7, 11, 13, 15, 23, 25, 27
-            o_ear, o_sh, o_el, o_wr, o_hp = 8, 12, 14, 16, 24
-            t_index, o_index = 19, 20
+            t_ear, t_sh, t_el, t_wr, t_pk, t_ix, t_th = 7, 11, 13, 15, 17, 19, 21
+            t_hp, t_kn, t_an, t_hl, t_ft = 23, 25, 27, 29, 31
+            o_ear, o_sh, o_el, o_wr, o_pk, o_ix, o_th = 8, 12, 14, 16, 18, 20, 22
+            o_hp, o_kn, o_an, o_hl, o_ft = 24, 26, 28, 30, 32
 
-        visibilities = [n_lm[t_sh].visibility, n_lm[t_el].visibility, n_lm[t_wr].visibility, n_lm[t_hp].visibility]
-        conf_side = float(np.mean(visibilities) * 100)
+        # 計算綜合信賴度 (納入肩、肘、腕、拇指、食指、髖、膝、踝)
+        key_vis = [
+            n_lm[t_sh].visibility, n_lm[t_el].visibility, n_lm[t_wr].visibility,
+            n_lm[t_th].visibility, n_lm[t_ix].visibility, n_lm[t_hp].visibility,
+            n_lm[t_kn].visibility, n_lm[t_an].visibility
+        ]
+        conf_side = float(np.mean(key_vis) * 100)
 
-        # 1. 解剖學軀幹軸心穩定：側視角融合前後肩點與前後髖點，消除肩膀飄到背後衣服的問題
+        # 1. 軀幹軸心穩定與臉部五官提取
         sh = pt2d(t_sh) * 0.65 + pt2d(o_sh) * 0.35
         hp = pt2d(t_hp) * 0.65 + pt2d(o_hp) * 0.35
         ear = pt2d(t_ear) if n_lm[t_ear].visibility >= n_lm[o_ear].visibility else pt2d(o_ear)
-        kn = pt2d(t_kn)
-        an = pt2d(t_an)
+        nose = pt2d(0)
+        l_eye, r_eye = pt2d(2), pt2d(5)
+        l_ear_pt, r_ear_pt = pt2d(7), pt2d(8)
+        l_mouth, r_mouth = pt2d(9), pt2d(10)
 
-        # 2. 防左右手反轉與遮擋優選：
-        # 在側面雙手同時搬運時，若 MediaPipe 把前景清楚伸展的手標成另一側，自動選取伸展較合理且可見度高的一側
-        el_t, wr_t, idx_t = pt2d(t_el), pt2d(t_wr), pt2d(t_index)
-        el_o, wr_o, idx_o = pt2d(o_el), pt2d(o_wr), pt2d(o_index)
+        # 2. 主側與對側之上肢 + 手掌三指提取 (防雙手重疊反轉)
+        el_t, wr_t, th_t, ix_t, pk_t = pt2d(t_el), pt2d(t_wr), pt2d(t_th), pt2d(t_ix), pt2d(t_pk)
+        el_o, wr_o, th_o, ix_o, pk_o = pt2d(o_el), pt2d(o_wr), pt2d(o_th), pt2d(o_ix), pt2d(o_pk)
 
-        # 比較兩側手腕離臉部/耳朵的距離與能見度，避免選到縮在脖子旁被遮擋的假點
         dist_t = np.linalg.norm(wr_t - sh)
         dist_o = np.linalg.norm(wr_o - sh)
         if n_lm[o_wr].visibility > n_lm[t_wr].visibility + 0.15 or (dist_o > dist_t * 1.25 and n_lm[o_wr].visibility > 0.4):
-            el, wr, hand_tip = el_o, wr_o, idx_o
+            el, wr, th, ix, pk = el_o, wr_o, th_o, ix_o, pk_o
+            b_el, b_wr, b_th, b_ix, b_pk = el_t, wr_t, th_t, ix_t, pk_t
+            w3_el, w3_wr, w3_th, w3_ix, w3_pk = pt3d(o_el), pt3d(o_wr), pt3d(o_th), pt3d(o_ix), pt3d(o_pk)
             conf_side = max(conf_side, float(n_lm[o_wr].visibility * 100))
         else:
-            el, wr, hand_tip = el_t, wr_t, idx_t
+            el, wr, th, ix, pk = el_t, wr_t, th_t, ix_t, pk_t
+            b_el, b_wr, b_th, b_ix, b_pk = el_o, wr_o, th_o, ix_o, pk_o
+            w3_el, w3_wr, w3_th, w3_ix, w3_pk = pt3d(t_el), pt3d(t_wr), pt3d(t_th), pt3d(t_ix), pt3d(t_pk)
 
-        # 3. 補正米色袋子邊緣造成的「手腕下縮」與黑色寬袖造成的「手肘下垂」
-        # 若手指端點比手腕更高/更遠，代表手掌正握持袋子上方，將手腕點適度向手部中心推進
-        if hand_tip[1] < wr[1]:
-            wr = wr * 0.65 + hand_tip * 0.35
-
-        # 若寬鬆袖口導致手肘點過度垂落，利用解剖學上臂與前臂比例進行平滑約束
+        # 解剖學上臂長度約束 (避免寬大黑色袖口把肘關節往下拉)
         torso_len = np.linalg.norm(hp - sh)
         upper_len = np.linalg.norm(el - sh)
         if torso_len > 10 and upper_len > torso_len * 0.72:
             el = sh + (el - sh) / upper_len * (torso_len * 0.62)
 
-        # ==================== 【純 2D 矢狀面人因角度解算】 ====================
-        # 1. 前臂屈曲 (Lower Arm): 180 - 肘關節內角 (手臂完全伸直為 0 度)
+        # 3. 下肢與足底三角形提取 (踝、跟、尖)
+        kn, an, hl, ft = pt2d(t_kn), pt2d(t_an), pt2d(t_hl), pt2d(t_ft)
+        b_kn, b_an, b_hl, b_ft = pt2d(o_kn), pt2d(o_an), pt2d(o_hl), pt2d(o_ft)
+
+        # ==================== 【RULA 全關節幾何角度解算】 ====================
+        # 1. 前臂屈曲角 (Lower Arm): 180 - 肘關節內角
         ang_lower_arm = abs(180.0 - calculate_2d_angle(sh, el, wr))
         
-        # 2. 上臂屈曲 (Upper Arm): 以軀幹主軸向量 (肩 -> 髖) 為 0 度基準線
+        # 2. 上臂屈曲角 (Upper Arm): 相對於軀幹主軸向量 (肩 -> 髖)
         trunk_vec = hp - sh
         ref_sh_down = sh + trunk_vec
         ang_upper_arm = calculate_2d_angle(ref_sh_down, sh, el)
         
-        # 3. 軀幹前傾 (Trunk): 髖骨至肩膀連線與正上方垂直線之夾角
+        # 3. 手腕屈伸角 (Wrist Flexion/Extension - RULA Step 3):
+        # 利用手掌中心 (食指與小指中點) 與手腕連線作為「手掌軸線」，計算與前臂延伸線之夾角
+        palm_mid_2d = (ix + pk) * 0.5
+        palm_len_2d = np.linalg.norm(palm_mid_2d - wr)
+        if palm_len_2d > 6.0:
+            raw_wrist_2d = abs(180.0 - calculate_2d_angle(el, wr, palm_mid_2d))
+        else:
+            raw_wrist_2d = 0.0
+        # 結合 3D 手腕角度抑制側視角透視折疊誤差，並限制在合理生理範圍 (0~60度)
+        palm_mid_3d = (w3_ix + w3_pk) * 0.5
+        raw_wrist_3d = abs(180.0 - calculate_3d_angle(w3_el, w3_wr, palm_mid_3d))
+        ang_wrist = float(np.clip(raw_wrist_2d * 0.6 + raw_wrist_3d * 0.4, 0.0, 60.0))
+
+        # 4. 手腕扭轉與尺橈偏判定 (Wrist Twist & Deviation - RULA Step 4):
+        # 透過拇指 (Thumb) 與小指 (Pinky) 的掌寬向量與前臂軸線關係判定旋前/旋後扭轉
+        forearm_vec_3d = w3_wr - w3_el
+        palm_span_3d = w3_th - w3_pk
+        # 計算掌寬向量與垂直軸(Y)及前臂之空間翻轉關係
+        twist_angle = calculate_3d_angle(w3_el, w3_wr, w3_th)
+        is_wrist_deviated = abs(180.0 - twist_angle) > 25.0
+        # 若拇指在 2D 視角明顯低於小指或手掌平面大幅度翻轉，判定為極端扭轉 (2分)，否則為中立 (1分)
+        thumb_pinky_dy = (th[1] - pk[1]) / max(np.linalg.norm(th - pk), 1.0)
+        wt_score = 2 if abs(thumb_pinky_dy) > 0.65 else 1
+
+        # 5. 軀幹前傾角 (Trunk - RULA Step 10): 髖至肩連線與垂直線夾角
         vertical_up = np.array([hp[0], hp[1] - 100.0])
         ang_trunk = calculate_2d_angle(vertical_up, hp, sh)
         
-        # 4. 頸部前屈 (Neck): 相對於軀幹延伸軸線
-        ang_neck = abs(180.0 - calculate_2d_angle(hp, sh, ear))
-        
-        # 整合正面鏡頭特徵進行 RULA 評分
+        # 6. 頭頸部屈曲與扭轉 (Neck - RULA Step 9):
+        # 綜合耳肩連線與臉部朝向 (耳->鼻/眼)，反應真實低頭或抬頭視物姿勢
+        head_center = ear * 0.6 + ((l_eye + r_eye) * 0.5) * 0.4
+        ang_neck = abs(180.0 - calculate_2d_angle(hp, sh, head_center))
+
+        # 7. 下肢足底支撐平衡判定 (Legs - RULA Step 11):
+        # 比較雙腳腳跟與腳尖接地高度差，若單腳明顯懸空 (>軀幹長度 20%) 則記為 2 分(不穩)，平穩為 1 分
+        foot_height_diff = abs( max(hl[1], ft[1]) - max(b_hl[1], b_ft[1]) )
+        lg_score = 2 if (torso_len > 10 and foot_height_diff > torso_len * 0.22) else 1
+
+        # ==================== 【RULA 查表綜合評分】 ====================
         s_ua = get_upper_arm_score(ang_upper_arm, is_abducted=front_mods.get("is_abducted", False))
         s_la = get_lower_arm_score(ang_lower_arm, is_across_midline=front_mods.get("is_across_midline", False))
+        s_wr = get_wrist_score(ang_wrist, is_deviated=is_wrist_deviated)
         s_tk = get_trunk_score(ang_trunk, is_side_bending=front_mods.get("is_side_bending", False))
-        s_nk = get_neck_score(ang_neck)
+        s_nk = get_neck_score(ang_neck, is_side_bending=front_mods.get("is_neck_side_bending", False))
         
-        sc_a, sc_b, sc_c, sc_d, grand, al = compute_rula_side_score(s_ua, s_la, s_nk, s_tk, m_val, f_val)
+        sc_a, sc_b, sc_c, sc_d, grand, al = compute_rula_full(
+            s_ua, s_la, s_wr, wt_score, s_nk, s_tk, lg_score, m_val, f_val
+        )
         
-        # 使用專屬單側骨架繪圖器繪製清晰標註圖
-        frame_annotated = draw_ergonomic_skeleton(
-            frame_work, ear, sh, el, wr, hp, kn, an,
-            ang_upper_arm, ang_lower_arm, ang_trunk
+        # 打包所有 33 點解剖座標供繪圖器渲染
+        pts_dict = {
+            "nose": nose, "l_eye": l_eye, "r_eye": r_eye,
+            "l_ear": l_ear_pt, "r_ear": r_ear_pt, "l_mouth": l_mouth, "r_mouth": r_mouth,
+            "ear": ear, "sh": sh, "el": el, "wr": wr, "th": th, "ix": ix, "pk": pk,
+            "hp": hp, "kn": kn, "an": an, "hl": hl, "ft": ft,
+            "o_sh": pt2d(o_sh), "o_el": b_el, "o_wr": b_wr, "o_th": b_th, "o_ix": b_ix, "o_pk": b_pk,
+            "o_hp": pt2d(o_hp), "o_kn": b_kn, "o_an": b_an, "o_hl": b_hl, "o_ft": b_ft
+        }
+
+        frame_annotated = draw_full_biomechanical_skeleton(
+            frame_work, pts_dict,
+            ang_upper_arm, ang_lower_arm, ang_wrist, ang_trunk, ang_neck, wt_score
         )
         
         side_prefix = "右手" if target_side == "右手側" else "左手"
@@ -402,10 +566,14 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             "軀幹角度": round(ang_trunk, 1),
             f"{side_prefix}上臂角度": round(ang_upper_arm, 1),
             f"{side_prefix}前臂角度": round(ang_lower_arm, 1),
+            f"{side_prefix}手腕角度": round(ang_wrist, 1),
+            f"{side_prefix}手腕扭轉": "極端扭轉(2分)" if wt_score == 2 else "中立(1分)",
+            "足底支撐狀態": "不平衡(2分)" if lg_score == 2 else "雙足平穩(1分)",
             f"{side_prefix}上臂外展補正": "是 (+1分)" if front_mods.get("is_abducted") else "否",
             f"{side_prefix}橫越中線補正": "是 (+1分)" if front_mods.get("is_across_midline") else "否",
             "軀幹側彎補正": "是 (+1分)" if front_mods.get("is_side_bending") else "否",
             f"{side_prefix} Score A": sc_a,
+            "頸軀腿 Score B": sc_b,
             f"{side_prefix} Score C": sc_c,
             f"{side_prefix} Grand Score": grand,
             f"{side_prefix} AL": al,
@@ -421,7 +589,9 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
 # ==================== 【Streamlit 網頁應用介面】 ====================
 st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layout="wide")
 st.title("RULA 姿勢危害評估系統")
-st.markdown("> **人因工程架構說明**：以側視角量測主要關節矢狀面 2D 屈曲角度（具備解剖學肩髖中心穩定與單側骨架渲染）；正面視角判定上臂外展、橫越中線與側彎等額外危害扣分項。")
+st.markdown(
+    "> **全 33 點生物力學架構說明**：系統完整擷取**臉部五官（鼻/眼/耳/嘴）**、**手掌平面與拇指軸線（腕/拇指/食指/小指）**及**足底支撐三角（踝/腳跟/腳尖）**，同步解算上臂、前臂、手腕屈伸、手腕扭轉、頭頸、軀幹與下肢支撐之完整 RULA 矩陣。"
+)
 
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
@@ -436,14 +606,14 @@ target_side = st.radio(
     options=["右手側", "左手側"],
     index=0,
     horizontal=True,
-    help="根據 RULA 規範，評估員應指定作業負擔較重、受力較大或主要操作之單側手部進行評級。"
+    help="主評估側將以高亮力學色塊標示（含手掌三角形與拇指扭轉軸），對側則以半透明輔助骨架呈現。"
 )
 
 st.header("第一步：上傳視角影片")
 col_front, col_right, col_left = st.columns(3)
 
 with col_front:
-    vid_front_file = st.file_uploader("1. 正面鏡頭 (必填: 判定外展/交叉)", type=['mp4', 'mov', 'avi'])
+    vid_front_file = st.file_uploader("1. 正面鏡頭 (必填: 判定外展/交叉/側傾)", type=['mp4', 'mov', 'avi'])
 with col_right:
     vid_right_file = st.file_uploader("2. 右側鏡頭 (量測右側動作)", type=['mp4', 'mov', 'avi'])
 with col_left:
@@ -459,7 +629,7 @@ with col_p3:
     combo_force = st.selectbox("負載與施力 (Force/Load):", ["0: < 2kg (間歇施力)", "1: 2-10kg (間歇施力)", "2: 2-10kg (靜態/重複施力)", "3: > 10kg 或快速衝擊力"])
 
 # 執行分析按鈕
-if st.button("🚀 啟動分析", type="primary", use_container_width=True):
+if st.button("🚀 啟動全關節生物力學分析", type="primary", use_container_width=True):
     selected_side_vid = vid_right_file if target_side == "右手側" else vid_left_file
     
     if not vid_front_file:
@@ -467,7 +637,7 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
     elif not selected_side_vid:
         st.error(f"❌ 缺少【{target_side}側面影片】！您選擇評估「{target_side}」，必須提供該側面的拍攝視角進行主屈曲量測。")
     else:
-        with st.spinner(f"系統正在進行三視角聯立解算（目標：{target_side}）..."):
+        with st.spinner(f"系統正在進行 33 點全解剖特徵擷取與三視角聯立解算（目標：{target_side}）..."):
             st.session_state.display_images_b64 = []
             st.session_state.zip_bytes = None
             gc.collect()
@@ -538,24 +708,23 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
                             side_annotated = put_chinese_text(side_annotated, f"Grand Score: {data['最終最高分']} 分 ({data['最終 AL']})", (15, 45), (0, 0, 255) if data['最終最高分'] > 4 else (0, 255, 0), 20)
                             side_annotated = put_chinese_text(side_annotated, f"外展:{data[f'{target_side[:2]}上臂外展補正']} | 交叉:{data[f'{target_side[:2]}橫越中線補正']}", (15, 75), (255, 180, 0), 16)
 
-                            # 調整輸出圖片尺寸以確保網頁與下載速度流暢
                             oh, ow = side_annotated.shape[:2]
                             out_scale = min(720 / max(oh, ow), 1.0)
                             if out_scale < 1.0:
                                 side_annotated = cv2.resize(side_annotated, (int(ow * out_scale), int(oh * out_scale)))
 
-                            is_ok, buf = cv2.imencode(".jpg", side_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+                            is_ok, buf = cv2.imencode(".jpg", side_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                             if is_ok:
                                 jpg_bytes = buf.tobytes()
                                 side_en = "Right" if target_side == "右手側" else "Left"
                                 zip_images.append((f"Sample_{i+1:03d}_{sec}s_{side_en}.jpg", jpg_bytes))
                                 
                                 b64_img = base64.b64encode(jpg_bytes).decode("utf-8")
-                                caption_str = f"樣本 #{i+1} ({sec}s) | 總分: {data['最終最高分']} ({data['最終 AL']})"
+                                caption_str = f"樣本 #{i+1} ({sec}s) | 總分: {data['最終最高分']} ({data['最終 AL']}) | 手腕: {data[f'{target_side[:2]}手腕角度']}°"
                                 display_images_b64.append((caption_str, b64_img))
 
                     progress_bar.progress((i + 1) / total_samples)
-                    status_text.text(f"多視角姿態解算進度: {i+1} / {total_samples} 筆完成")
+                    status_text.text(f"全關節姿態解算進度: {i+1} / {total_samples} 筆完成")
 
             cap_front.release()
             cap_side.release()
@@ -588,7 +757,7 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
 # ==================== 【網頁即時成果展示與打包下載區】 ====================
 if st.session_state.analysis_done:
     st.divider()
-    st.success(f"✅ 【{st.session_state.analyzed_side}】多視角解算完成！以下為即時分析結果：")
+    st.success(f"✅ 【{st.session_state.analyzed_side}】全 33 點多視角生物力學解算完成！以下為即時分析結果：")
     
     df_show = st.session_state.df_records
     
@@ -607,7 +776,7 @@ if st.session_state.analysis_done:
         m4.metric("平均視角信賴度", f"{avg_conf:.1f}%")
 
         # 2. 互動式數據報表
-        st.subheader("📊 詳細抽樣數據報表")
+        st.subheader("📊 詳細抽樣數據報表（含手腕屈伸、手腕扭轉與足底支撐）")
         st.dataframe(df_show, use_container_width=True)
 
         # 3. 瀏覽器本地直出 ZIP 下載按鈕
@@ -619,7 +788,7 @@ if st.session_state.analysis_done:
         )
 
         # 4. Base64 內嵌影像預覽畫廊
-        st.subheader("🖼️ 抽樣標註照片預覽")
+        st.subheader("🖼️ 抽樣標註照片預覽（含五官網格、手掌拇指三角、足底支撐三角）")
         with st.expander("點此展開 / 收合所有抽樣標註照片", expanded=True):
             gallery_cols = st.columns(3)
             for idx, (cap_text, b64_str) in enumerate(st.session_state.display_images_b64):
