@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import cv2
 import mediapipe as mp
 import math
@@ -8,6 +9,7 @@ import os
 import zipfile
 import io
 import gc
+import base64
 import tempfile
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
@@ -47,6 +49,57 @@ TABLE_C = [
     [1, 2, 3, 3, 4, 5, 5], [2, 2, 3, 4, 4, 5, 5], [3, 3, 3, 4, 4, 5, 6], [3, 3, 3, 4, 5, 6, 6],
     [4, 4, 4, 5, 6, 7, 7], [4, 4, 5, 6, 6, 7, 7], [5, 5, 6, 6, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7]
 ]
+
+# ==================== 【繞過 /media/ 的瀏覽器直出下載模組】 ====================
+def render_blob_download_button(zip_bytes, filename, label_text):
+    """使用 JS Blob 直接在瀏覽器記憶體合成檔案並觸發下載，徹底解決無法存取網站問題"""
+    b64_zip = base64.b64encode(zip_bytes).decode("utf-8")
+    html_code = f"""
+    <div style="margin: 10px 0;">
+        <button id="dl_btn" style="
+            width: 100%;
+            background-color: #FF4B4B;
+            color: white;
+            padding: 14px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        ">{label_text}</button>
+    </div>
+    <script>
+    document.getElementById("dl_btn").addEventListener("click", function() {{
+        const b64Data = "{b64_zip}";
+        const byteCharacters = atob(b64Data);
+        const byteArrays = [];
+        const sliceSize = 1024;
+        for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {{
+            const slice = byteCharacters.slice(offset, offset + sliceSize);
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {{
+                byteNumbers[i] = slice.charCodeAt(i);
+            }}
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+        }}
+        const blob = new Blob(byteArrays, {{type: "application/zip"}});
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = "{filename}";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() {{
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }}, 2000);
+    }});
+    </script>
+    """
+    components.html(html_code, height=70)
 
 # ==================== 【人因工程規範幾何計算】 ====================
 def calculate_3d_angle(a, b, c):
@@ -130,7 +183,7 @@ def put_chinese_text(img, text, position, color, size=15):
 # ==================== 【正面鏡頭：冠狀面/水平面補正分析】 ====================
 def analyze_front_camera(frame, pose_model, target_side):
     orig_h, orig_w = frame.shape[:2]
-    scale = min(800 / orig_w, 600 / orig_h)
+    scale = min(640 / orig_w, 480 / orig_h)
     frame = cv2.resize(frame, (int(orig_w * scale), int(orig_h * scale)))
     
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -166,7 +219,7 @@ def analyze_front_camera(frame, pose_model, target_side):
 # ==================== 【側視角鏡頭：矢狀面主要人因量測】 ====================
 def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val):
     orig_h, orig_w = frame.shape[:2]
-    scale = min(800 / orig_w, 600 / orig_h)
+    scale = min(640 / orig_w, 480 / orig_h)
     frame = cv2.resize(frame, (int(orig_w * scale), int(orig_h * scale)))
     
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -196,19 +249,15 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         hp = [w_lm[hip_idx].x, w_lm[hip_idx].y, w_lm[hip_idx].z]
         ear = [w_lm[ear_idx].x, w_lm[ear_idx].y, w_lm[ear_idx].z]
         
-        # 1. 前臂屈曲 (Lower Arm): 180 - 內角
         ang_lower_arm = abs(180.0 - calculate_3d_angle(sh, el, wr))
         
-        # 2. 上臂屈曲 (Upper Arm): 以軀幹主軸向量為基準線
         trunk_vec = [hp[0] - sh[0], hp[1] - sh[1], hp[2] - sh[2]]
         ref_sh_down = [sh[0] + trunk_vec[0], sh[1] + trunk_vec[1], sh[2] + trunk_vec[2]]
         ang_upper_arm = calculate_3d_angle(ref_sh_down, sh, el)
         
-        # 3. 軀幹前傾 (Trunk): 髖骨至肩膀與垂直線夾角
         vertical_up = [hp[0], hp[1] - 1.0, hp[2]]
         ang_trunk = calculate_3d_angle(vertical_up, hp, sh)
         
-        # 4. 頸部前屈 (Neck): 相對於軀幹軸線
         ang_neck = abs(180.0 - calculate_3d_angle(hp, sh, ear))
         
         s_ua = get_upper_arm_score(ang_upper_arm, is_abducted=front_mods.get("is_abducted", False))
@@ -245,11 +294,10 @@ st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layo
 st.title("RULA 姿勢危害評估系統")
 st.markdown("> **人因工程架構說明**：以側視角量測主要關節屈曲角度；正面視角判定上臂外展、橫越中線與側彎等額外危害扣分項。")
 
-# 初始化 Session State，確保固定檔名與記憶體穩定
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
     st.session_state.df_records = None
-    st.session_state.display_images = []
+    st.session_state.display_images_b64 = []
     st.session_state.zip_bytes = None
     st.session_state.zip_filename = "RULA_Report.zip"
     st.session_state.analyzed_side = ""
@@ -275,7 +323,7 @@ with col_left:
 st.header("第二步：等距抽樣與負載參數設定")
 col_p1, col_p2, col_p3 = st.columns(3)
 with col_p1:
-    num_samples = st.slider("等距抽樣張數", min_value=5, max_value=150, value=30)
+    num_samples = st.slider("等距抽樣張數", min_value=5, max_value=100, value=25)
 with col_p2:
     combo_muscle = st.selectbox("肌肉使用分數 (Muscle Score):", ["0: 靜態少於1分鐘 / 偶發動作", "1: 姿勢維持>1分鐘 / 高重複作業"])
 with col_p3:
@@ -291,8 +339,7 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
         st.error(f"❌ 缺少【{target_side}側面影片】！您選擇評估「{target_side}」，必須提供該側面的拍攝視角進行主屈曲量測。")
     else:
         with st.spinner(f"系統正在進行三視角聯立解算（目標：{target_side}）..."):
-            # 先清除舊資料釋放記憶體
-            st.session_state.display_images = []
+            st.session_state.display_images_b64 = []
             st.session_state.zip_bytes = None
             gc.collect()
 
@@ -325,12 +372,11 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
 
             records = []
             zip_images = []
-            display_images = []
+            display_images_b64 = []
             
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            # 邊讀邊分析，避免高畫質原始影格塞爆雲端記憶體
             with mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1, min_detection_confidence=0.6) as pose:
                 total_samples = len(sample_indices)
                 for i, idx in enumerate(sample_indices):
@@ -341,10 +387,7 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
                     s_s, s_frame = cap_side.read()
 
                     if s_f and s_s:
-                        # 1. 正面鏡頭判斷外展/交叉特徵
                         _, front_mods = analyze_front_camera(f_frame, pose, target_side)
-                        
-                        # 2. 側視角結合特徵進行 RULA 核心解算
                         succ_s, data, side_annotated, conf = analyze_side_camera(s_frame, pose, target_side, front_mods, m_val, f_val)
 
                         if succ_s and data is not None:
@@ -357,24 +400,24 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
                             record.update(data)
                             records.append(record)
 
-                            # 在影像上標註數據
-                            side_annotated = put_chinese_text(side_annotated, f"時間: {sec}s | 目標: {target_side}", (15, 15), (0, 255, 255), 18)
-                            side_annotated = put_chinese_text(side_annotated, f"Grand Score: {data['最終最高分']} 分 ({data['最終 AL']})", (15, 45), (0, 0, 255) if data['最終最高分'] > 4 else (0, 255, 0), 16)
-                            side_annotated = put_chinese_text(side_annotated, f"正面補正: 外展({data[f'{target_side[:2]}上臂外展補正']}) | 交叉({data[f'{target_side[:2]}橫越中線補正']})", (15, 75), (255, 150, 0), 14)
+                            side_annotated = put_chinese_text(side_annotated, f"時間: {sec}s | 目標: {target_side}", (12, 12), (0, 255, 255), 16)
+                            side_annotated = put_chinese_text(side_annotated, f"Grand Score: {data['最終最高分']} 分 ({data['最終 AL']})", (12, 38), (0, 0, 255) if data['最終最高分'] > 4 else (0, 255, 0), 15)
+                            side_annotated = put_chinese_text(side_annotated, f"外展:{data[f'{target_side[:2]}上臂外展補正']} | 交叉:{data[f'{target_side[:2]}橫越中線補正']}", (12, 64), (255, 150, 0), 13)
 
-                            # 壓縮為輕量 JPG，降低 ZIP 與預覽記憶體消耗
-                            is_ok, buf = cv2.imencode(".jpg", side_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                            is_ok, buf = cv2.imencode(".jpg", side_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                             if is_ok:
                                 jpg_bytes = buf.tobytes()
                                 side_en = "Right" if target_side == "右手側" else "Left"
                                 zip_images.append((f"Sample_{i+1:03d}_{sec}s_{side_en}.jpg", jpg_bytes))
+                                
+                                # 轉成 Base64 字串直接嵌進 HTML，不走 /media/ 通道
+                                b64_img = base64.b64encode(jpg_bytes).decode("utf-8")
                                 caption_str = f"樣本 #{i+1} ({sec}s) | 總分: {data['最終最高分']} ({data['最終 AL']})"
-                                display_images.append((caption_str, jpg_bytes))
+                                display_images_b64.append((caption_str, b64_img))
 
                     progress_bar.progress((i + 1) / total_samples)
                     status_text.text(f"多視角姿態解算進度: {i+1} / {total_samples} 筆完成")
 
-            # 釋放影片資源並刪除雲端暫存檔，歸還記憶體
             cap_front.release()
             cap_side.release()
             try:
@@ -385,7 +428,6 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
 
             df_result = pd.DataFrame(records) if records else pd.DataFrame()
             
-            # 建立壓縮包
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 if not df_result.empty:
@@ -393,13 +435,12 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
                 for fname, fbytes in zip_images:
                     zf.writestr(f"Photos/{fname}", fbytes)
 
-            # 固定檔名並存入 Session State (避免點擊下載時檔名變動導致連結失效)
             side_en_tag = "Right" if target_side == "右手側" else "Left"
             fixed_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
             
             st.session_state.analysis_done = True
             st.session_state.df_records = df_result
-            st.session_state.display_images = display_images
+            st.session_state.display_images_b64 = display_images_b64
             st.session_state.zip_bytes = zip_buffer.getvalue()
             st.session_state.zip_filename = f"RULA_{side_en_tag}_Report_{fixed_time_str}.zip"
             st.session_state.analyzed_side = target_side
@@ -430,24 +471,28 @@ if st.session_state.analysis_done:
         st.subheader("📊 詳細抽樣數據報表")
         st.dataframe(df_show, use_container_width=True)
 
-        # 3. 底部 ZIP 打包下載按鈕 (放在照片牆上方與下方各一個，方便直接下載)
+        # 3. 瀏覽器本地直出 ZIP 下載按鈕 (繞過 Streamlit 伺服器 /media/ 限制)
         st.subheader("📦 匯出完整稽核報告")
-        st.download_button(
-            label=f"📥 點此下載 {st.session_state.analyzed_side} RULA 分析報告與照片庫 (ZIP)",
-            data=st.session_state.zip_bytes,
-            file_name=st.session_state.zip_filename,
-            mime="application/zip",
-            type="primary",
-            use_container_width=True,
-            key="download_zip_btn"
+        render_blob_download_button(
+            st.session_state.zip_bytes,
+            st.session_state.zip_filename,
+            f"📥 點此直接下載 {st.session_state.analyzed_side} RULA 分析報告與照片庫 (ZIP)"
         )
 
-        # 4. 標註影像預覽畫廊 (每排顯示 3 張)
+        # 4. Base64 內嵌影像預覽畫廊 (不透過 /media/，100% 保證顯示不破圖)
         st.subheader("🖼️ 抽樣標註照片預覽")
         with st.expander("點此展開 / 收合所有抽樣標註照片", expanded=True):
             gallery_cols = st.columns(3)
-            for idx, (cap_text, jpg_bytes) in enumerate(st.session_state.display_images):
+            for idx, (cap_text, b64_str) in enumerate(st.session_state.display_images_b64):
                 with gallery_cols[idx % 3]:
-                    st.image(jpg_bytes, caption=cap_text, use_container_width=True)
+                    st.markdown(
+                        f"""
+                        <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
+                            <img src="data:image/jpeg;base64,{b64_str}" style="width:100%; border-radius:6px;">
+                            <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_text}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
     else:
         st.warning("⚠️ 影片中未偵測到有效的人體姿態關鍵點，請確認影片人物是否清晰完整。")
