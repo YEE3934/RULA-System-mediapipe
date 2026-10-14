@@ -6,6 +6,7 @@ import math
 import numpy as np
 import pandas as pd
 import os
+import urllib.request
 import zipfile
 import io
 import gc
@@ -50,9 +51,67 @@ TABLE_C = [
     [4, 4, 4, 5, 6, 7, 7], [4, 4, 5, 6, 6, 7, 7], [5, 5, 6, 6, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7]
 ]
 
+# ==================== 【自動中文字型載入器 (徹底解決方框亂碼)】 ====================
+@st.cache_resource
+def ensure_chinese_font():
+    """尋找系統中文字型，若無則自動下載開源中文字型至 /tmp，保證不出現方框亂碼"""
+    candidates = [
+        "font.ttf",
+        "/tmp/chinese_font.otf",
+        "/tmp/chinese_font.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "C:/Windows/Fonts/msjh.ttc",
+        "msjh.ttc"
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+
+    # 搜尋 Linux /usr/share/fonts 目錄下任何支援 CJK 的字型
+    if os.path.exists("/usr/share/fonts"):
+        for root, _, files in os.walk("/usr/share/fonts"):
+            for f in files:
+                if any(k in f.lower() for k in ["wqy", "noto", "cjk", "zenhei", "microhei", "droid"]):
+                    return os.path.join(root, f)
+
+    # 若雲端環境完全沒裝字型，自動下載 Google Noto Sans TC 至 /tmp
+    urls = [
+        ("https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf", "/tmp/chinese_font.otf"),
+        ("https://raw.githubusercontent.com/StellarCN/scp_zh/master/fonts/SimHei.ttf", "/tmp/chinese_font.ttf")
+    ]
+    for url, target_path in urls:
+        try:
+            urllib.request.urlretrieve(url, target_path)
+            if os.path.exists(target_path) and os.path.getsize(target_path) > 100000:
+                return target_path
+        except Exception:
+            continue
+    return None
+
+FONT_FILE_PATH = ensure_chinese_font()
+
+def put_chinese_text(img, text, position, color, size=18):
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+    font = None
+    if FONT_FILE_PATH and os.path.exists(FONT_FILE_PATH):
+        try:
+            font = ImageFont.truetype(FONT_FILE_PATH, size)
+        except Exception:
+            font = None
+    if font is None:
+        font = ImageFont.load_default()
+    
+    # 加上黑色文字描邊/陰影，讓文字在淺色屋頂或深色背景都清晰可讀
+    x, y = position
+    draw.text((x + 1, y + 1), text, fill=(0, 0, 0), font=font)
+    draw.text((x, y), text, fill=(color[2], color[1], color[0]), font=font)
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
 # ==================== 【繞過 /media/ 的瀏覽器直出下載模組】 ====================
 def render_blob_download_button(zip_bytes, filename, label_text):
-    """使用 JS Blob 直接在瀏覽器記憶體合成檔案並觸發下載，徹底解決無法存取網站問題"""
     b64_zip = base64.b64encode(zip_bytes).decode("utf-8")
     html_code = f"""
     <div style="margin: 10px 0;">
@@ -101,16 +160,26 @@ def render_blob_download_button(zip_bytes, filename, label_text):
     """
     components.html(html_code, height=70)
 
-# ==================== 【人因工程規範幾何計算】 ====================
-def calculate_3d_angle(a, b, c):
-    ba = np.array(a) - np.array(b)
-    bc = np.array(c) - np.array(b)
+# ==================== 【人因工程純 2D 矢狀面幾何計算】 ====================
+def calculate_2d_angle(a, b, c):
+    """計算以 b 為頂點，向量 ba 與 bc 在 2D 投影平面的夾角"""
+    ba = np.array([a[0] - b[0], a[1] - b[1]], dtype=float)
+    bc = np.array([c[0] - b[0], c[1] - b[1]], dtype=float)
     norm_ba = np.linalg.norm(ba)
     norm_bc = np.linalg.norm(bc)
-    if norm_ba == 0 or norm_bc == 0: 
+    if norm_ba < 1e-5 or norm_bc < 1e-5:
         return 0.0
     cosine = np.clip(np.dot(ba, bc) / (norm_ba * norm_bc), -1.0, 1.0)
     return float(np.degrees(np.arccos(cosine)))
+
+def enhance_image_for_pose(bgr_img):
+    """使用 CLAHE 強化膚色手臂、米色袋子與黑色寬袖之間的邊界對比度"""
+    lab = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    merged = cv2.merge((cl, a, b))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
 
 def get_upper_arm_score(angle, is_abducted=False, is_raised=False):
     if angle <= 20: base = 1
@@ -153,40 +222,53 @@ def compute_rula_side_score(ua, la, nk, tk, m_val, f_val):
     al_num = 1 if grand_score <= 2 else (2 if grand_score <= 4 else (3 if grand_score <= 6 else 4))
     return score_a, score_b, score_c, score_d, grand_score, f"AL{al_num}"
 
-def put_chinese_text(img, text, position, color, size=15):
-    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(img_pil)
-    
-    font = None
-    font_candidates = [
-        "font.ttf",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "msjh.ttc",
-        "simhei.ttf"
-    ]
-    for p in font_candidates:
-        if os.path.exists(p):
-            try:
-                font = ImageFont.truetype(p, size)
-                break
-            except Exception:
-                continue
-                
-    if font is None:
-        font = ImageFont.load_default()
-        
-    draw.text(position, text, fill=(color[2], color[1], color[0]), font=font)
-    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+# ==================== 【專屬單側人因骨架繪圖器 (不畫背面盲區與臉部雜點)】 ====================
+def draw_ergonomic_skeleton(img, ear, sh, el, wr, hp, kn, an, ang_ua, ang_la, ang_tk):
+    """
+    只繪製受測側的乾淨人因力學鏈，並直接在關節旁標註角度，消除 33 點蜘蛛網與背後假點
+    """
+    out = img.copy()
+    p_ear = (int(ear[0]), int(ear[1]))
+    p_sh  = (int(sh[0]),  int(sh[1]))
+    p_el  = (int(el[0]),  int(el[1]))
+    p_wr  = (int(wr[0]),  int(wr[1]))
+    p_hp  = (int(hp[0]),  int(hp[1]))
+    p_kn  = (int(kn[0]),  int(kn[1]))
+    p_an  = (int(an[0]),  int(an[1]))
+
+    # 繪製垂直參考基準虛線 (過髖關節垂直向上)
+    cv2.line(out, p_hp, (p_hp[0], max(0, p_sh[1] - 60)), (180, 180, 180), 2, cv2.LINE_AA)
+
+    # 1. 下肢支撐鏈 (髖 -> 膝 -> 踝) - 藍色
+    cv2.line(out, p_hp, p_kn, (255, 180, 0), 4, cv2.LINE_AA)
+    cv2.line(out, p_kn, p_an, (255, 180, 0), 4, cv2.LINE_AA)
+
+    # 2. 軀幹與頸部主軸 (髖 -> 肩 -> 耳) - 綠色/黃色
+    cv2.line(out, p_hp, p_sh, (0, 230, 0), 5, cv2.LINE_AA)
+    cv2.line(out, p_sh, p_ear, (0, 255, 255), 4, cv2.LINE_AA)
+
+    # 3. 上肢搬運力學鏈 (肩 -> 肘 -> 腕) - 高亮紅橘色
+    cv2.line(out, p_sh, p_el, (0, 80, 255), 5, cv2.LINE_AA)
+    cv2.line(out, p_el, p_wr, (0, 165, 255), 5, cv2.LINE_AA)
+
+    # 繪製關節節點 (外白圈 + 內紅點)
+    for pt in [p_ear, p_sh, p_el, p_wr, p_hp, p_kn, p_an]:
+        cv2.circle(out, pt, 8, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(out, pt, 5, (0, 0, 255), -1, cv2.LINE_AA)
+
+    # 在關節旁直接標註即時角度，方便專題報告講解
+    out = put_chinese_text(out, f"上臂:{ang_ua:.0f}°", (p_sh[0] + 12, p_sh[1] - 10), (0, 255, 255), 15)
+    out = put_chinese_text(out, f"前臂:{ang_la:.0f}°", (p_el[0] + 12, p_el[1] + 5), (0, 200, 255), 15)
+    out = put_chinese_text(out, f"軀幹:{ang_tk:.0f}°", (p_hp[0] + 12, p_hp[1] - 20), (100, 255, 100), 15)
+    return out
 
 # ==================== 【正面鏡頭：冠狀面/水平面補正分析】 ====================
 def analyze_front_camera(frame, pose_model, target_side):
     orig_h, orig_w = frame.shape[:2]
-    scale = min(640 / orig_w, 480 / orig_h)
-    frame = cv2.resize(frame, (int(orig_w * scale), int(orig_h * scale)))
+    scale = min(800 / max(orig_h, orig_w), 1.0)
+    frame_resized = cv2.resize(frame, (int(orig_w * scale), int(orig_h * scale)))
     
-    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
     results = pose_model.process(img_rgb)
     
     if not results.pose_landmarks:
@@ -216,56 +298,103 @@ def analyze_front_camera(frame, pose_model, target_side):
     }
     return True, mods
 
-# ==================== 【側視角鏡頭：矢狀面主要人因量測】 ====================
+# ==================== 【側視角鏡頭：高解析 + 解剖校正 + 純 2D 矢狀面量測】 ====================
 def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val):
     orig_h, orig_w = frame.shape[:2]
-    scale = min(640 / orig_w, 480 / orig_h)
-    frame = cv2.resize(frame, (int(orig_w * scale), int(orig_h * scale)))
+    # 保持直式/橫式高解析度 (長邊 1000px)，避免手部與袋子糊在一起
+    scale = min(1000 / max(orig_h, orig_w), 1.0)
+    work_w, work_h = int(orig_w * scale), int(orig_h * scale)
+    frame_work = cv2.resize(frame, (work_w, work_h))
     
-    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # 強化影像邊緣對比度後再送入 MediaPipe
+    enhanced_bgr = enhance_image_for_pose(frame_work)
+    img_rgb = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
     results = pose_model.process(img_rgb)
-    frame_annotated = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     
-    if not results.pose_world_landmarks or not results.pose_landmarks:
-        return False, None, frame_annotated, 0.0
+    if not results.pose_landmarks:
+        return False, None, frame_work, 0.0
         
-    mp.solutions.drawing_utils.draw_landmarks(frame_annotated, results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS)
-    w_lm = results.pose_world_landmarks.landmark
     n_lm = results.pose_landmarks.landmark
     
     try:
-        sh_idx = 12 if target_side == "右手側" else 11
-        el_idx = 14 if target_side == "右手側" else 13
-        wr_idx = 16 if target_side == "右手側" else 15
-        hip_idx = 24 if target_side == "右手側" else 23
-        ear_idx = 8 if target_side == "右手側" else 7
-        
-        visibilities = [n_lm[sh_idx].visibility, n_lm[el_idx].visibility, n_lm[wr_idx].visibility, n_lm[hip_idx].visibility]
+        # 取得像素座標輔助函式
+        def pt2d(idx):
+            return np.array([n_lm[idx].x * work_w, n_lm[idx].y * work_h], dtype=float)
+
+        if target_side == "右手側":
+            t_ear, t_sh, t_el, t_wr, t_hp, t_kn, t_an = 8, 12, 14, 16, 24, 26, 28
+            o_ear, o_sh, o_el, o_wr, o_hp = 7, 11, 13, 15, 23
+            # 右手掌延伸點 (食指20 / 拇指22)
+            t_index, o_index = 20, 19
+        else:
+            t_ear, t_sh, t_el, t_wr, t_hp, t_kn, t_an = 7, 11, 13, 15, 23, 25, 27
+            o_ear, o_sh, o_el, o_wr, o_hp = 8, 12, 14, 16, 24
+            t_index, o_index = 19, 20
+
+        visibilities = [n_lm[t_sh].visibility, n_lm[t_el].visibility, n_lm[t_wr].visibility, n_lm[t_hp].visibility]
         conf_side = float(np.mean(visibilities) * 100)
+
+        # 1. 解剖學軀幹軸心穩定：側視角融合前後肩點與前後髖點，消除肩膀飄到背後衣服的問題
+        sh = pt2d(t_sh) * 0.65 + pt2d(o_sh) * 0.35
+        hp = pt2d(t_hp) * 0.65 + pt2d(o_hp) * 0.35
+        ear = pt2d(t_ear) if n_lm[t_ear].visibility >= n_lm[o_ear].visibility else pt2d(o_ear)
+        kn = pt2d(t_kn)
+        an = pt2d(t_an)
+
+        # 2. 防左右手反轉與遮擋優選：
+        # 在側面雙手同時搬運時，若 MediaPipe 把前景清楚伸展的手標成另一側，自動選取伸展較合理且可見度高的一側
+        el_t, wr_t, idx_t = pt2d(t_el), pt2d(t_wr), pt2d(t_index)
+        el_o, wr_o, idx_o = pt2d(o_el), pt2d(o_wr), pt2d(o_index)
+
+        # 比較兩側手腕離臉部/耳朵的距離與能見度，避免選到縮在脖子旁被遮擋的假點
+        dist_t = np.linalg.norm(wr_t - sh)
+        dist_o = np.linalg.norm(wr_o - sh)
+        if n_lm[o_wr].visibility > n_lm[t_wr].visibility + 0.15 or (dist_o > dist_t * 1.25 and n_lm[o_wr].visibility > 0.4):
+            el, wr, hand_tip = el_o, wr_o, idx_o
+            conf_side = max(conf_side, float(n_lm[o_wr].visibility * 100))
+        else:
+            el, wr, hand_tip = el_t, wr_t, idx_t
+
+        # 3. 補正米色袋子邊緣造成的「手腕下縮」與黑色寬袖造成的「手肘下垂」
+        # 若手指端點比手腕更高/更遠，代表手掌正握持袋子上方，將手腕點適度向手部中心推進
+        if hand_tip[1] < wr[1]:
+            wr = wr * 0.65 + hand_tip * 0.35
+
+        # 若寬鬆袖口導致手肘點過度垂落，利用解剖學上臂與前臂比例進行平滑約束
+        torso_len = np.linalg.norm(hp - sh)
+        upper_len = np.linalg.norm(el - sh)
+        if torso_len > 10 and upper_len > torso_len * 0.72:
+            el = sh + (el - sh) / upper_len * (torso_len * 0.62)
+
+        # ==================== 【純 2D 矢狀面人因角度解算】 ====================
+        # 1. 前臂屈曲 (Lower Arm): 180 - 肘關節內角 (手臂完全伸直為 0 度)
+        ang_lower_arm = abs(180.0 - calculate_2d_angle(sh, el, wr))
         
-        sh = [w_lm[sh_idx].x, w_lm[sh_idx].y, w_lm[sh_idx].z]
-        el = [w_lm[el_idx].x, w_lm[el_idx].y, w_lm[el_idx].z]
-        wr = [w_lm[wr_idx].x, w_lm[wr_idx].y, w_lm[wr_idx].z]
-        hp = [w_lm[hip_idx].x, w_lm[hip_idx].y, w_lm[hip_idx].z]
-        ear = [w_lm[ear_idx].x, w_lm[ear_idx].y, w_lm[ear_idx].z]
+        # 2. 上臂屈曲 (Upper Arm): 以軀幹主軸向量 (肩 -> 髖) 為 0 度基準線
+        trunk_vec = hp - sh
+        ref_sh_down = sh + trunk_vec
+        ang_upper_arm = calculate_2d_angle(ref_sh_down, sh, el)
         
-        ang_lower_arm = abs(180.0 - calculate_3d_angle(sh, el, wr))
+        # 3. 軀幹前傾 (Trunk): 髖骨至肩膀連線與正上方垂直線之夾角
+        vertical_up = np.array([hp[0], hp[1] - 100.0])
+        ang_trunk = calculate_2d_angle(vertical_up, hp, sh)
         
-        trunk_vec = [hp[0] - sh[0], hp[1] - sh[1], hp[2] - sh[2]]
-        ref_sh_down = [sh[0] + trunk_vec[0], sh[1] + trunk_vec[1], sh[2] + trunk_vec[2]]
-        ang_upper_arm = calculate_3d_angle(ref_sh_down, sh, el)
+        # 4. 頸部前屈 (Neck): 相對於軀幹延伸軸線
+        ang_neck = abs(180.0 - calculate_2d_angle(hp, sh, ear))
         
-        vertical_up = [hp[0], hp[1] - 1.0, hp[2]]
-        ang_trunk = calculate_3d_angle(vertical_up, hp, sh)
-        
-        ang_neck = abs(180.0 - calculate_3d_angle(hp, sh, ear))
-        
+        # 整合正面鏡頭特徵進行 RULA 評分
         s_ua = get_upper_arm_score(ang_upper_arm, is_abducted=front_mods.get("is_abducted", False))
         s_la = get_lower_arm_score(ang_lower_arm, is_across_midline=front_mods.get("is_across_midline", False))
         s_tk = get_trunk_score(ang_trunk, is_side_bending=front_mods.get("is_side_bending", False))
         s_nk = get_neck_score(ang_neck)
         
         sc_a, sc_b, sc_c, sc_d, grand, al = compute_rula_side_score(s_ua, s_la, s_nk, s_tk, m_val, f_val)
+        
+        # 使用專屬單側骨架繪圖器繪製清晰標註圖
+        frame_annotated = draw_ergonomic_skeleton(
+            frame_work, ear, sh, el, wr, hp, kn, an,
+            ang_upper_arm, ang_lower_arm, ang_trunk
+        )
         
         side_prefix = "右手" if target_side == "右手側" else "左手"
         data = {
@@ -286,13 +415,13 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         }
         return True, data, frame_annotated, conf_side
     except Exception:
-        return False, None, frame_annotated, 0.0
+        return False, None, frame_work, 0.0
 
 
 # ==================== 【Streamlit 網頁應用介面】 ====================
 st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layout="wide")
 st.title("RULA 姿勢危害評估系統")
-st.markdown("> **人因工程架構說明**：以側視角量測主要關節屈曲角度；正面視角判定上臂外展、橫越中線與側彎等額外危害扣分項。")
+st.markdown("> **人因工程架構說明**：以側視角量測主要關節矢狀面 2D 屈曲角度（具備解剖學肩髖中心穩定與單側骨架渲染）；正面視角判定上臂外展、橫越中線與側彎等額外危害扣分項。")
 
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
@@ -377,7 +506,11 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            with mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1, min_detection_confidence=0.6) as pose:
+            with mp.solutions.pose.Pose(
+                static_image_mode=True,
+                model_complexity=1,
+                min_detection_confidence=0.55
+            ) as pose:
                 total_samples = len(sample_indices)
                 for i, idx in enumerate(sample_indices):
                     sec = round(idx / fps, 2)
@@ -400,17 +533,23 @@ if st.button("🚀 啟動分析", type="primary", use_container_width=True):
                             record.update(data)
                             records.append(record)
 
-                            side_annotated = put_chinese_text(side_annotated, f"時間: {sec}s | 目標: {target_side}", (12, 12), (0, 255, 255), 16)
-                            side_annotated = put_chinese_text(side_annotated, f"Grand Score: {data['最終最高分']} 分 ({data['最終 AL']})", (12, 38), (0, 0, 255) if data['最終最高分'] > 4 else (0, 255, 0), 15)
-                            side_annotated = put_chinese_text(side_annotated, f"外展:{data[f'{target_side[:2]}上臂外展補正']} | 交叉:{data[f'{target_side[:2]}橫越中線補正']}", (12, 64), (255, 150, 0), 13)
+                            # 左上角資訊看板標註
+                            side_annotated = put_chinese_text(side_annotated, f"時間: {sec}s | 評估側: {target_side}", (15, 15), (0, 255, 255), 20)
+                            side_annotated = put_chinese_text(side_annotated, f"Grand Score: {data['最終最高分']} 分 ({data['最終 AL']})", (15, 45), (0, 0, 255) if data['最終最高分'] > 4 else (0, 255, 0), 20)
+                            side_annotated = put_chinese_text(side_annotated, f"外展:{data[f'{target_side[:2]}上臂外展補正']} | 交叉:{data[f'{target_side[:2]}橫越中線補正']}", (15, 75), (255, 180, 0), 16)
 
-                            is_ok, buf = cv2.imencode(".jpg", side_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                            # 調整輸出圖片尺寸以確保網頁與下載速度流暢
+                            oh, ow = side_annotated.shape[:2]
+                            out_scale = min(720 / max(oh, ow), 1.0)
+                            if out_scale < 1.0:
+                                side_annotated = cv2.resize(side_annotated, (int(ow * out_scale), int(oh * out_scale)))
+
+                            is_ok, buf = cv2.imencode(".jpg", side_annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
                             if is_ok:
                                 jpg_bytes = buf.tobytes()
                                 side_en = "Right" if target_side == "右手側" else "Left"
                                 zip_images.append((f"Sample_{i+1:03d}_{sec}s_{side_en}.jpg", jpg_bytes))
                                 
-                                # 轉成 Base64 字串直接嵌進 HTML，不走 /media/ 通道
                                 b64_img = base64.b64encode(jpg_bytes).decode("utf-8")
                                 caption_str = f"樣本 #{i+1} ({sec}s) | 總分: {data['最終最高分']} ({data['最終 AL']})"
                                 display_images_b64.append((caption_str, b64_img))
@@ -471,7 +610,7 @@ if st.session_state.analysis_done:
         st.subheader("📊 詳細抽樣數據報表")
         st.dataframe(df_show, use_container_width=True)
 
-        # 3. 瀏覽器本地直出 ZIP 下載按鈕 (繞過 Streamlit 伺服器 /media/ 限制)
+        # 3. 瀏覽器本地直出 ZIP 下載按鈕
         st.subheader("📦 匯出完整稽核報告")
         render_blob_download_button(
             st.session_state.zip_bytes,
@@ -479,7 +618,7 @@ if st.session_state.analysis_done:
             f"📥 點此直接下載 {st.session_state.analyzed_side} RULA 分析報告與照片庫 (ZIP)"
         )
 
-        # 4. Base64 內嵌影像預覽畫廊 (不透過 /media/，100% 保證顯示不破圖)
+        # 4. Base64 內嵌影像預覽畫廊
         st.subheader("🖼️ 抽樣標註照片預覽")
         with st.expander("點此展開 / 收合所有抽樣標註照片", expanded=True):
             gallery_cols = st.columns(3)
