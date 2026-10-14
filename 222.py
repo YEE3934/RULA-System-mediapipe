@@ -156,7 +156,6 @@ def analyze_front_camera(frame, pose_model, target_side):
     sh_idx = 12 if target_side == "右手側" else 11
     el_idx = 14 if target_side == "右手側" else 13
     wr_idx = 16 if target_side == "右手側" else 15
-    hip_idx = 24 if target_side == "右手側" else 23
     
     # 身體中線 X 座標
     midline_x = (lm[11].x + lm[12].x + lm[23].x + lm[24].x) / 4.0
@@ -267,9 +266,17 @@ st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layo
 st.title("RULA 姿勢危害評估系統")
 st.markdown("> **人因工程架構說明**：以側視角量測主要關節屈曲角度；正面視角判定上臂外展、橫越中線與側彎等額外危害扣分項。")
 
+# 初始化 Session State，確保點擊下載或排序表格時畫面不會清空
+if "analysis_done" not in st.session_state:
+    st.session_state.analysis_done = False
+    st.session_state.df_records = None
+    st.session_state.display_images = []
+    st.session_state.zip_bytes = None
+    st.session_state.analyzed_side = ""
+
 # 選擇評估目標側
 target_side = st.radio(
-    " 請選擇本次作業分析之【主要評估側】:",
+    "請選擇本次作業分析之【主要評估側】:",
     options=["右手側", "左手側"],
     index=0,
     horizontal=True,
@@ -295,9 +302,8 @@ with col_p2:
 with col_p3:
     combo_force = st.selectbox("負載與施力 (Force/Load):", ["0: < 2kg (間歇施力)", "1: 2-10kg (間歇施力)", "2: 2-10kg (靜態/重複施力)", "3: > 10kg 或快速衝擊力"])
 
-# 執行分析
-if st.button(" 啟動分析", type="primary", use_container_width=True):
-    # 決定側視角影片來源
+# 執行分析按鈕
+if st.button("🚀 啟動分析", type="primary", use_container_width=True):
     selected_side_vid = vid_right_file if target_side == "右手側" else vid_left_file
     
     if not vid_front_file:
@@ -306,12 +312,10 @@ if st.button(" 啟動分析", type="primary", use_container_width=True):
         st.error(f"❌ 缺少【{target_side}側面影片】！您選擇評估「{target_side}」，必須提供該側面的拍攝視角進行主屈曲量測。")
     else:
         with st.spinner(f"系統正在進行三視角聯立解算（目標：{target_side}）..."):
-            # 建立正面暫存
             t_front = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
             t_front.write(vid_front_file.read())
             cap_front = cv2.VideoCapture(t_front.name)
             
-            # 建立側面暫存
             t_side = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
             t_side.write(selected_side_vid.read())
             cap_side = cv2.VideoCapture(t_side.name)
@@ -344,6 +348,7 @@ if st.button(" 啟動分析", type="primary", use_container_width=True):
 
             records = []
             zip_images = []
+            display_images = []
             
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -368,6 +373,7 @@ if st.button(" 啟動分析", type="primary", use_container_width=True):
                             "視角信賴度(%)": round(conf, 1)
                         }
                         record.update(data)
+                        record.pop("Overall_Conf", None)
                         records.append(record)
 
                         # 在影像上標註數據
@@ -378,23 +384,74 @@ if st.button(" 啟動分析", type="primary", use_container_width=True):
                         is_ok, buf = cv2.imencode(".jpg", side_annotated)
                         if is_ok:
                             zip_images.append((f"Sample_{i+1:03d}_{sec}s_{target_side}.jpg", buf.tobytes()))
+                            # 轉為 RGB 供網頁預覽顯示
+                            rgb_preview = cv2.cvtColor(side_annotated, cv2.COLOR_BGR2RGB)
+                            caption_str = f"樣本 #{i+1} ({sec}s) | 總分: {data['最終最高分']} ({data['最終 AL']})"
+                            display_images.append((caption_str, rgb_preview))
 
                     progress_bar.progress((i + 1) / total_samples)
                     status_text.text(f"多視角姿態解算進度: {i+1} / {total_samples} 筆完成")
 
-            # 打包成下載 ZIP
+            # 建立結果 DataFrame 與 ZIP 檔案緩衝區
+            df_result = pd.DataFrame(records) if records else pd.DataFrame()
+            
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w') as zf:
-                if records:
-                    df = pd.DataFrame(records)
-                    zf.writestr("RULA多視角分析報表.csv", df.to_csv(index=False).encode('utf-8-sig'))
+                if not df_result.empty:
+                    zf.writestr("RULA多視角分析報表.csv", df_result.to_csv(index=False).encode('utf-8-sig'))
                 for fname, fbytes in zip_images:
                     zf.writestr(f"標註照片庫/{fname}", fbytes)
 
-            st.success("✅ 多視角解算完成！請下載完整 RULA 稽核報表。")
-            st.download_button(
-                label=f"📦 下載 {target_side} RULA 分析報告 (ZIP)",
-                data=zip_buffer.getvalue(),
-                file_name=f"RULA_{target_side}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                mime="application/zip"
-            )
+            # 存入 Session State
+            st.session_state.analysis_done = True
+            st.session_state.df_records = df_result
+            st.session_state.display_images = display_images
+            st.session_state.zip_bytes = zip_buffer.getvalue()
+            st.session_state.analyzed_side = target_side
+
+# ==================== 【網頁即時成果展示與打包下載區】 ====================
+if st.session_state.analysis_done:
+    st.divider()
+    st.success(f"✅ 【{st.session_state.analyzed_side}】多視角解算完成！以下為即時分析結果：")
+    
+    df_show = st.session_state.df_records
+    
+    if not df_show.empty:
+        # 1. 核心人因指標看板
+        st.subheader("📈 RULA 危害指標總覽")
+        avg_score = df_show["最終最高分"].mean()
+        max_score = df_show["最終最高分"].max()
+        high_risk_pct = (df_show["最終最高分"] >= 5).mean() * 100
+        avg_conf = df_show["視角信賴度(%)"].mean()
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("平均 RULA 總分", f"{avg_score:.2f} 分")
+        m2.metric("最高風險峰值", f"{max_score} 分")
+        m3.metric("高危害佔比 (AL3/AL4)", f"{high_risk_pct:.1f}%")
+        m4.metric("平均視角信賴度", f"{avg_conf:.1f}%")
+
+        # 2. 互動式數據報表
+        st.subheader("📊 詳細抽樣數據報表")
+        st.dataframe(df_show, use_container_width=True)
+
+        # 3. 標註影像預覽畫廊 (每排顯示 3 張)
+        st.subheader("🖼️ 抽樣標註照片預覽")
+        with st.expander("點此展開 / 收合所有抽樣標註照片", expanded=True):
+            gallery_cols = st.columns(3)
+            for idx, (cap_text, img_rgb) in enumerate(st.session_state.display_images):
+                with gallery_cols[idx % 3]:
+                    st.image(img_rgb, caption=cap_text, use_container_width=True)
+
+        # 4. 底部 ZIP 打包下載按鈕
+        st.divider()
+        st.subheader("📦 匯出完整稽核報告")
+        st.download_button(
+            label=f"📥 下載 {st.session_state.analyzed_side} RULA 分析報告與照片庫 (ZIP)",
+            data=st.session_state.zip_bytes,
+            file_name=f"RULA_{st.session_state.analyzed_side}_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True
+        )
+    else:
+        st.warning("⚠️ 影片中未偵測到有效的人體姿態關鍵點，請確認影片人物是否清晰完整。")
