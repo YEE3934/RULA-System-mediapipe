@@ -102,7 +102,6 @@ def put_chinese_text(img, text, position, color, size=18):
         font = ImageFont.load_default()
     
     x, y = position
-    # 黑色描邊確保在任何背景皆清晰可見
     for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1), (0, 1), (1, 0)]:
         draw.text((x + dx, y + dy), text, fill=(0, 0, 0), font=font)
     draw.text((x, y), text, fill=(color[2], color[1], color[0]), font=font)
@@ -202,7 +201,6 @@ def get_lower_arm_score(angle, is_across_midline=False):
     return min(max(base, 1), 3)
 
 def get_wrist_score(angle, is_deviated=False):
-    # RULA Step 3: 0~5度=1分, 5~15度=2分, >15度=3分; 尺偏/橈偏 +1分
     if angle <= 5: base = 1
     elif angle <= 15: base = 2
     else: base = 3
@@ -242,14 +240,14 @@ def compute_rula_full(ua, la, w, wt, nk, tk, lg, m_val, f_val):
     al_num = 1 if grand_score <= 2 else (2 if grand_score <= 4 else (3 if grand_score <= 6 else 4))
     return score_a, score_b, score_c, score_d, grand_score, f"AL{al_num}"
 
-# ==================== 【全 33 點生物力學分層渲染器 (五官 + 手掌拇指三角 + 足底三角)】 ====================
+# ==================== 【全 33 點生物力學渲染器 (全身雙側完整繪製 + 目標側高亮標註)】 ====================
 def draw_full_biomechanical_skeleton(
-    img, pts_dict, ang_ua, ang_la, ang_wr, ang_tk, ang_nk, wt_score
+    img, pts_dict, ang_ua, ang_la, ang_wr, ang_tk, ang_nk, wt_score, target_side_label=""
 ):
     """
-    繪製完整 33 點解剖特徵：
-    1. 臉部五官網格 (鼻、雙眼、雙耳、嘴角)
-    2. 雙側完整骨架 (對側為半透明青色輔助層，主測側為高亮力學層)
+    完整繪製全身 33 個解剖點：
+    1. 臉部五官 11 點網格 (鼻、雙眼內中外、雙耳、嘴角)
+    2. 全身左右雙側骨架 (主評估側以高對比力學色塊與角度標籤呈現，對側亦完整繪製手掌三角、拇指與足底三角)
     3. 手部精細結構 (手腕、拇指軸線、食指-小指手掌平面三角形)
     4. 足底支撐結構 (腳踝-腳跟-腳尖支撐三角形)
     """
@@ -259,102 +257,93 @@ def draw_full_biomechanical_skeleton(
     def to_pt(arr):
         return (int(round(arr[0])), int(round(arr[1])))
 
-    # ---- 第一層：半透明色塊與對側輔助骨架 (繪製於 overlay) ----
-    # 1. 軀幹核心網格與對側肢體
+    # 取出對側與主側座標
     o_sh, o_el, o_wr = to_pt(pts_dict["o_sh"]), to_pt(pts_dict["o_el"]), to_pt(pts_dict["o_wr"])
     o_th, o_ix, o_pk = to_pt(pts_dict["o_th"]), to_pt(pts_dict["o_ix"]), to_pt(pts_dict["o_pk"])
     o_hp, o_kn, o_an = to_pt(pts_dict["o_hp"]), to_pt(pts_dict["o_kn"]), to_pt(pts_dict["o_an"])
     o_hl, o_ft = to_pt(pts_dict["o_hl"]), to_pt(pts_dict["o_ft"])
 
-    # 對側上肢與手掌 (青灰色輔助線)
-    cv2.line(overlay, o_sh, o_el, (200, 180, 100), 2, cv2.LINE_AA)
-    cv2.line(overlay, o_el, o_wr, (200, 180, 100), 2, cv2.LINE_AA)
-    cv2.line(overlay, o_wr, o_th, (200, 220, 120), 2, cv2.LINE_AA)
-    cv2.polylines(overlay, [np.array([o_wr, o_ix, o_pk], dtype=np.int32)], True, (200, 180, 100), 2, cv2.LINE_AA)
+    p_ear = to_pt(pts_dict["ear"])
+    p_sh  = to_pt(pts_dict["sh"])
+    p_el  = to_pt(pts_dict["el"])
+    p_wr  = to_pt(pts_dict["wr"])
+    p_th  = to_pt(pts_dict["th"])
+    p_ix  = to_pt(pts_dict["ix"])
+    p_pk  = to_pt(pts_dict["pk"])
+    p_hp  = to_pt(pts_dict["hp"])
+    p_kn  = to_pt(pts_dict["kn"])
+    p_an  = to_pt(pts_dict["an"])
+    p_hl  = to_pt(pts_dict["hl"])
+    p_ft  = to_pt(pts_dict["ft"])
 
-    # 對側下肢與足底三角
-    cv2.line(overlay, o_hp, o_kn, (200, 160, 100), 2, cv2.LINE_AA)
-    cv2.line(overlay, o_kn, o_an, (200, 160, 100), 2, cv2.LINE_AA)
-    cv2.polylines(overlay, [np.array([o_an, o_hl, o_ft], dtype=np.int32)], True, (200, 160, 100), 2, cv2.LINE_AA)
-    for p in [o_sh, o_el, o_wr, o_th, o_ix, o_pk, o_hp, o_kn, o_an, o_hl, o_ft]:
-        cv2.circle(overlay, p, 4, (220, 200, 120), -1, cv2.LINE_AA)
-
-    # 主評估側手掌三角形與足底三角形半透明填充
-    p_wr = to_pt(pts_dict["wr"])
-    p_th = to_pt(pts_dict["th"])
-    p_ix = to_pt(pts_dict["ix"])
-    p_pk = to_pt(pts_dict["pk"])
-    p_an = to_pt(pts_dict["an"])
-    p_hl = to_pt(pts_dict["hl"])
-    p_ft = to_pt(pts_dict["ft"])
-
+    # ---- 第一層：半透明力學平面填充 (雙側手掌三角、雙側足底三角、軀幹網格) ----
+    o_palm_poly = np.array([o_wr, o_ix, o_pk], dtype=np.int32)
+    o_foot_poly = np.array([o_an, o_hl, o_ft], dtype=np.int32)
     palm_poly = np.array([p_wr, p_ix, p_pk], dtype=np.int32)
     foot_poly = np.array([p_an, p_hl, p_ft], dtype=np.int32)
+    torso_poly = np.array([p_sh, o_sh, o_hp, p_hp], dtype=np.int32)
+
+    cv2.fillPoly(overlay, [torso_poly], (0, 180, 60))
+    cv2.fillPoly(overlay, [o_palm_poly], (255, 200, 0))
+    cv2.fillPoly(overlay, [o_foot_poly], (255, 180, 0))
     cv2.fillPoly(overlay, [palm_poly], (0, 220, 255))
-    cv2.fillPoly(overlay, [foot_poly], (255, 200, 0))
+    cv2.fillPoly(overlay, [foot_poly], (0, 200, 255))
+    cv2.addWeighted(overlay, 0.35, out, 0.65, 0, out)
 
-    # 融合半透明圖層
-    cv2.addWeighted(overlay, 0.42, out, 0.58, 0, out)
+    # ---- 第二層：對側完整骨架與關節點 (青藍色系，確保全身雙側皆清晰呈現) ----
+    cv2.line(out, p_sh, o_sh, (0, 210, 120), 2, cv2.LINE_AA)
+    cv2.line(out, p_hp, o_hp, (0, 210, 120), 2, cv2.LINE_AA)
+    cv2.line(out, o_sh, o_hp, (180, 200, 80), 2, cv2.LINE_AA)
 
-    # ---- 第二層：頭部五官解剖網格 (鼻、雙眼、雙耳、雙嘴角) ----
-    p_nose = to_pt(pts_dict["nose"])
-    p_leye = to_pt(pts_dict["l_eye"])
-    p_reye = to_pt(pts_dict["r_eye"])
-    p_lear = to_pt(pts_dict["l_ear"])
-    p_rear = to_pt(pts_dict["r_ear"])
-    p_lmou = to_pt(pts_dict["l_mouth"])
-    p_rmou = to_pt(pts_dict["r_mouth"])
-    p_ear  = to_pt(pts_dict["ear"])
-    p_sh   = to_pt(pts_dict["sh"])
-    p_el   = to_pt(pts_dict["el"])
-    p_hp   = to_pt(pts_dict["hp"])
-    p_kn   = to_pt(pts_dict["kn"])
+    cv2.line(out, o_sh, o_el, (255, 190, 0), 3, cv2.LINE_AA)
+    cv2.line(out, o_el, o_wr, (255, 210, 50), 3, cv2.LINE_AA)
+    cv2.line(out, o_wr, o_th, (255, 100, 220), 2, cv2.LINE_AA)
+    cv2.polylines(out, [o_palm_poly], True, (255, 240, 80), 2, cv2.LINE_AA)
 
-    # 繪製臉部特徵連線 (耳 -> 眼 -> 鼻、雙眼連線、嘴角連線、鼻至嘴中線)
-    cv2.line(out, p_lear, p_leye, (255, 255, 100), 2, cv2.LINE_AA)
-    cv2.line(out, p_rear, p_reye, (255, 255, 100), 2, cv2.LINE_AA)
-    cv2.line(out, p_leye, p_nose, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.line(out, p_reye, p_nose, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.line(out, p_leye, p_reye, (255, 220, 0), 2, cv2.LINE_AA)
-    cv2.line(out, p_lmou, p_rmou, (180, 100, 255), 2, cv2.LINE_AA)
-    mouth_mid = ((p_lmou[0] + p_rmou[0]) // 2, (p_lmou[1] + p_rmou[1]) // 2)
-    cv2.line(out, p_nose, mouth_mid, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.line(out, o_hp, o_kn, (255, 170, 50), 3, cv2.LINE_AA)
+    cv2.line(out, o_kn, o_an, (255, 190, 80), 3, cv2.LINE_AA)
+    cv2.polylines(out, [o_foot_poly], True, (255, 220, 100), 2, cv2.LINE_AA)
 
-    for fp in [p_nose, p_leye, p_reye, p_lear, p_rear, p_lmou, p_rmou]:
+    for p_opp in [o_sh, o_el, o_wr, o_th, o_ix, o_pk, o_hp, o_kn, o_an, o_hl, o_ft]:
+        cv2.circle(out, p_opp, 5, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(out, p_opp, 3, (255, 140, 0), -1, cv2.LINE_AA)
+
+    # ---- 第三層：頭部五官 11 點解剖網格 (鼻、雙眼內中外、雙耳、嘴角) ----
+    f_pts = [to_pt(pts_dict[f"f_{i}"]) for i in range(11)]
+    # 右眼軌跡 (0->4->5->6->8) 與 左眼軌跡 (0->1->2->3->7)
+    for a_i, b_i in [(0,4), (4,5), (5,6), (6,8), (0,1), (1,2), (2,3), (3,7), (2,5), (9,10)]:
+        cv2.line(out, f_pts[a_i], f_pts[b_i], (0, 255, 255), 2, cv2.LINE_AA)
+    mouth_mid = ((f_pts[9][0] + f_pts[10][0]) // 2, (f_pts[9][1] + f_pts[10][1]) // 2)
+    cv2.line(out, f_pts[0], mouth_mid, (0, 255, 255), 2, cv2.LINE_AA)
+
+    for fp in f_pts:
         cv2.circle(out, fp, 4, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(out, fp, 3, (0, 180, 255), -1, cv2.LINE_AA)
 
-    # ---- 第三層：主評估側核心人因力學鏈 ----
-    # 垂直參考基準線 (過髖關節正上方)
-    cv2.line(out, p_hp, (p_hp[0], max(0, p_sh[1] - 70)), (190, 190, 190), 2, cv2.LINE_AA)
+    # ---- 第四層：主評估側核心人因力學鏈 (高亮顯示) ----
+    cv2.line(out, p_hp, (p_hp[0], max(0, p_sh[1] - 70)), (200, 200, 200), 2, cv2.LINE_AA)
 
-    # 1. 下肢與足底支撐三角形 (髖 -> 膝 -> 踝 -> 跟/尖)
-    cv2.line(out, p_hp, p_kn, (255, 170, 0), 4, cv2.LINE_AA)
-    cv2.line(out, p_kn, p_an, (255, 170, 0), 4, cv2.LINE_AA)
-    cv2.polylines(out, [foot_poly], True, (255, 220, 0), 3, cv2.LINE_AA)
+    # 下肢與足底支撐三角形
+    cv2.line(out, p_hp, p_kn, (0, 165, 255), 4, cv2.LINE_AA)
+    cv2.line(out, p_kn, p_an, (0, 190, 255), 4, cv2.LINE_AA)
+    cv2.polylines(out, [foot_poly], True, (0, 235, 255), 3, cv2.LINE_AA)
 
-    # 2. 軀幹與頭頸軸線 (髖 -> 肩 -> 耳 -> 鼻)
-    cv2.line(out, p_hp, p_sh, (0, 230, 0), 5, cv2.LINE_AA)
+    # 軀幹與頭頸軸線
+    cv2.line(out, p_hp, p_sh, (0, 240, 0), 5, cv2.LINE_AA)
     cv2.line(out, p_sh, p_ear, (0, 255, 255), 4, cv2.LINE_AA)
-    cv2.line(out, p_ear, p_nose, (0, 215, 255), 3, cv2.LINE_AA)
+    cv2.line(out, p_ear, f_pts[0], (0, 215, 255), 3, cv2.LINE_AA)
 
-    # 3. 上肢與手掌力學三角 (肩 -> 肘 -> 腕 + 拇指向量 + 食指/小指掌面三角)
-    cv2.line(out, p_sh, p_el, (0, 70, 255), 5, cv2.LINE_AA)
-    cv2.line(out, p_el, p_wr, (0, 150, 255), 5, cv2.LINE_AA)
-    # 手掌平面三角形 (腕 - 食指 - 小指)
+    # 上肢與手掌力學三角 + 拇指扭轉軸
+    cv2.line(out, p_sh, p_el, (0, 60, 255), 5, cv2.LINE_AA)
+    cv2.line(out, p_el, p_wr, (0, 140, 255), 5, cv2.LINE_AA)
     cv2.polylines(out, [palm_poly], True, (0, 255, 255), 3, cv2.LINE_AA)
-    # 拇指獨立向量 (粉紫色高亮，用於呈現手腕翻轉方向)
     cv2.line(out, p_wr, p_th, (255, 50, 255), 3, cv2.LINE_AA)
 
-    # 繪製主側關鍵點節點
-    main_joints = [p_ear, p_sh, p_el, p_wr, p_hp, p_kn, p_an]
-    for pt in main_joints:
+    for pt in [p_ear, p_sh, p_el, p_wr, p_hp, p_kn, p_an]:
         cv2.circle(out, pt, 7, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(out, pt, 5, (0, 0, 255), -1, cv2.LINE_AA)
 
-    # 繪製手部與足部端點節點 (拇指、食指、小指、腳跟、腳尖)
-    extremity_joints = [p_th, p_ix, p_pk, p_hl, p_ft]
-    for pt in extremity_joints:
+    for pt in [p_th, p_ix, p_pk, p_hl, p_ft]:
         cv2.circle(out, pt, 6, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(out, pt, 4, (255, 0, 200), -1, cv2.LINE_AA)
 
@@ -365,9 +354,14 @@ def draw_full_biomechanical_skeleton(
     out = put_chinese_text(out, f"前臂:{ang_la:.0f}°", (p_el[0] + 12, p_el[1] + 2), (0, 200, 255), 14)
     out = put_chinese_text(out, f"手腕:{ang_wr:.0f}°|{twist_str}", (p_wr[0] + 12, p_wr[1] + 5), (255, 160, 255), 14)
     out = put_chinese_text(out, f"軀幹:{ang_tk:.0f}°", (p_hp[0] + 12, p_hp[1] - 15), (100, 255, 100), 14)
+
+    if target_side_label:
+        h_i, _ = out.shape[:2]
+        out = put_chinese_text(out, f"🎥 獨立擷取視角: {target_side_label}專用鏡頭", (12, h_i - 28), (255, 255, 255), 15)
+
     return out
 
-# ==================== 【正面鏡頭：冠狀面/水平面補正分析】 ====================
+# ==================== 【正面鏡頭：冠狀面/水平面補正分析 (支援指定單側)】 ====================
 def analyze_front_camera(frame, pose_model, target_side):
     orig_h, orig_w = frame.shape[:2]
     scale = min(800 / max(orig_h, orig_w), 1.0)
@@ -387,7 +381,7 @@ def analyze_front_camera(frame, pose_model, target_side):
     
     midline_x = (lm[11].x + lm[12].x + lm[23].x + lm[24].x) / 4.0
     
-    shoulder_width = abs(lm[11].x - lm[12].x)
+    shoulder_width = max(abs(lm[11].x - lm[12].x), 0.05)
     elbow_out_dist = (lm[el_idx].x - lm[sh_idx].x) if target_side == "右手側" else (lm[sh_idx].x - lm[el_idx].x)
     is_abducted = elbow_out_dist > shoulder_width * 0.35
     
@@ -396,7 +390,6 @@ def analyze_front_camera(frame, pose_model, target_side):
     shoulder_tilt = abs(lm[11].y - lm[12].y)
     is_trunk_side_bending = shoulder_tilt > 0.08
 
-    # 正面視角檢測頭部/頸部是否明顯側轉或側傾
     ear_diff_y = abs(lm[7].y - lm[8].y)
     is_neck_side_bending = ear_diff_y > shoulder_width * 0.18
     
@@ -408,7 +401,7 @@ def analyze_front_camera(frame, pose_model, target_side):
     }
     return True, mods
 
-# ==================== 【側視角鏡頭：33 點全解剖擷取與 RULA 全矩陣解算】 ====================
+# ==================== 【側視角鏡頭：單側獨立擷取、分析與 RULA 計算】 ====================
 def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val):
     orig_h, orig_w = frame.shape[:2]
     scale = min(1000 / max(orig_h, orig_w), 1.0)
@@ -432,7 +425,6 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         def pt3d(idx):
             return np.array([w_lm[idx].x, w_lm[idx].y, w_lm[idx].z], dtype=float)
 
-        # 定義主評估側與對側之 33 點索引 (含五官、手腕三指、足部三點)
         if target_side == "右手側":
             t_ear, t_sh, t_el, t_wr, t_pk, t_ix, t_th = 8, 12, 14, 16, 18, 20, 22
             t_hp, t_kn, t_an, t_hl, t_ft = 24, 26, 28, 30, 32
@@ -444,7 +436,6 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             o_ear, o_sh, o_el, o_wr, o_pk, o_ix, o_th = 8, 12, 14, 16, 18, 20, 22
             o_hp, o_kn, o_an, o_hl, o_ft = 24, 26, 28, 30, 32
 
-        # 計算綜合信賴度 (納入肩、肘、腕、拇指、食指、髖、膝、踝)
         key_vis = [
             n_lm[t_sh].visibility, n_lm[t_el].visibility, n_lm[t_wr].visibility,
             n_lm[t_th].visibility, n_lm[t_ix].visibility, n_lm[t_hp].visibility,
@@ -452,16 +443,13 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         ]
         conf_side = float(np.mean(key_vis) * 100)
 
-        # 1. 軀幹軸心穩定與臉部五官提取
+        # 1. 軀幹軸心穩定與臉部 11 點提取
         sh = pt2d(t_sh) * 0.65 + pt2d(o_sh) * 0.35
         hp = pt2d(t_hp) * 0.65 + pt2d(o_hp) * 0.35
         ear = pt2d(t_ear) if n_lm[t_ear].visibility >= n_lm[o_ear].visibility else pt2d(o_ear)
-        nose = pt2d(0)
         l_eye, r_eye = pt2d(2), pt2d(5)
-        l_ear_pt, r_ear_pt = pt2d(7), pt2d(8)
-        l_mouth, r_mouth = pt2d(9), pt2d(10)
 
-        # 2. 主側與對側之上肢 + 手掌三指提取 (防雙手重疊反轉)
+        # 2. 主側與對側之上肢 + 手掌三指提取
         el_t, wr_t, th_t, ix_t, pk_t = pt2d(t_el), pt2d(t_wr), pt2d(t_th), pt2d(t_ix), pt2d(t_pk)
         el_o, wr_o, th_o, ix_o, pk_o = pt2d(o_el), pt2d(o_wr), pt2d(o_th), pt2d(o_ix), pt2d(o_pk)
 
@@ -477,7 +465,7 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             b_el, b_wr, b_th, b_ix, b_pk = el_o, wr_o, th_o, ix_o, pk_o
             w3_el, w3_wr, w3_th, w3_ix, w3_pk = pt3d(t_el), pt3d(t_wr), pt3d(t_th), pt3d(t_ix), pt3d(t_pk)
 
-        # 解剖學上臂長度約束 (避免寬大黑色袖口把肘關節往下拉)
+        # 解剖學上臂長度約束
         torso_len = np.linalg.norm(hp - sh)
         upper_len = np.linalg.norm(el - sh)
         if torso_len > 10 and upper_len > torso_len * 0.72:
@@ -487,54 +475,35 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         kn, an, hl, ft = pt2d(t_kn), pt2d(t_an), pt2d(t_hl), pt2d(t_ft)
         b_kn, b_an, b_hl, b_ft = pt2d(o_kn), pt2d(o_an), pt2d(o_hl), pt2d(o_ft)
 
-        # ==================== 【RULA 全關節幾何角度解算】 ====================
-        # 1. 前臂屈曲角 (Lower Arm): 180 - 肘關節內角
+        # ==================== 【RULA 獨立關節角度解算】 ====================
         ang_lower_arm = abs(180.0 - calculate_2d_angle(sh, el, wr))
         
-        # 2. 上臂屈曲角 (Upper Arm): 相對於軀幹主軸向量 (肩 -> 髖)
         trunk_vec = hp - sh
         ref_sh_down = sh + trunk_vec
         ang_upper_arm = calculate_2d_angle(ref_sh_down, sh, el)
         
-        # 3. 手腕屈伸角 (Wrist Flexion/Extension - RULA Step 3):
-        # 利用手掌中心 (食指與小指中點) 與手腕連線作為「手掌軸線」，計算與前臂延伸線之夾角
         palm_mid_2d = (ix + pk) * 0.5
         palm_len_2d = np.linalg.norm(palm_mid_2d - wr)
-        if palm_len_2d > 6.0:
-            raw_wrist_2d = abs(180.0 - calculate_2d_angle(el, wr, palm_mid_2d))
-        else:
-            raw_wrist_2d = 0.0
-        # 結合 3D 手腕角度抑制側視角透視折疊誤差，並限制在合理生理範圍 (0~60度)
+        raw_wrist_2d = abs(180.0 - calculate_2d_angle(el, wr, palm_mid_2d)) if palm_len_2d > 6.0 else 0.0
         palm_mid_3d = (w3_ix + w3_pk) * 0.5
         raw_wrist_3d = abs(180.0 - calculate_3d_angle(w3_el, w3_wr, palm_mid_3d))
         ang_wrist = float(np.clip(raw_wrist_2d * 0.6 + raw_wrist_3d * 0.4, 0.0, 60.0))
 
-        # 4. 手腕扭轉與尺橈偏判定 (Wrist Twist & Deviation - RULA Step 4):
-        # 透過拇指 (Thumb) 與小指 (Pinky) 的掌寬向量與前臂軸線關係判定旋前/旋後扭轉
-        forearm_vec_3d = w3_wr - w3_el
-        palm_span_3d = w3_th - w3_pk
-        # 計算掌寬向量與垂直軸(Y)及前臂之空間翻轉關係
         twist_angle = calculate_3d_angle(w3_el, w3_wr, w3_th)
         is_wrist_deviated = abs(180.0 - twist_angle) > 25.0
-        # 若拇指在 2D 視角明顯低於小指或手掌平面大幅度翻轉，判定為極端扭轉 (2分)，否則為中立 (1分)
         thumb_pinky_dy = (th[1] - pk[1]) / max(np.linalg.norm(th - pk), 1.0)
         wt_score = 2 if abs(thumb_pinky_dy) > 0.65 else 1
 
-        # 5. 軀幹前傾角 (Trunk - RULA Step 10): 髖至肩連線與垂直線夾角
         vertical_up = np.array([hp[0], hp[1] - 100.0])
         ang_trunk = calculate_2d_angle(vertical_up, hp, sh)
         
-        # 6. 頭頸部屈曲與扭轉 (Neck - RULA Step 9):
-        # 綜合耳肩連線與臉部朝向 (耳->鼻/眼)，反應真實低頭或抬頭視物姿勢
         head_center = ear * 0.6 + ((l_eye + r_eye) * 0.5) * 0.4
         ang_neck = abs(180.0 - calculate_2d_angle(hp, sh, head_center))
 
-        # 7. 下肢足底支撐平衡判定 (Legs - RULA Step 11):
-        # 比較雙腳腳跟與腳尖接地高度差，若單腳明顯懸空 (>軀幹長度 20%) 則記為 2 分(不穩)，平穩為 1 分
-        foot_height_diff = abs( max(hl[1], ft[1]) - max(b_hl[1], b_ft[1]) )
+        foot_height_diff = abs(max(hl[1], ft[1]) - max(b_hl[1], b_ft[1]))
         lg_score = 2 if (torso_len > 10 and foot_height_diff > torso_len * 0.22) else 1
 
-        # ==================== 【RULA 查表綜合評分】 ====================
+        # RULA 查表計算
         s_ua = get_upper_arm_score(ang_upper_arm, is_abducted=front_mods.get("is_abducted", False))
         s_la = get_lower_arm_score(ang_lower_arm, is_across_midline=front_mods.get("is_across_midline", False))
         s_wr = get_wrist_score(ang_wrist, is_deviated=is_wrist_deviated)
@@ -545,19 +514,20 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             s_ua, s_la, s_wr, wt_score, s_nk, s_tk, lg_score, m_val, f_val
         )
         
-        # 打包所有 33 點解剖座標供繪圖器渲染
+        # 打包全部 33 點座標供繪圖器渲染
         pts_dict = {
-            "nose": nose, "l_eye": l_eye, "r_eye": r_eye,
-            "l_ear": l_ear_pt, "r_ear": r_ear_pt, "l_mouth": l_mouth, "r_mouth": r_mouth,
             "ear": ear, "sh": sh, "el": el, "wr": wr, "th": th, "ix": ix, "pk": pk,
             "hp": hp, "kn": kn, "an": an, "hl": hl, "ft": ft,
             "o_sh": pt2d(o_sh), "o_el": b_el, "o_wr": b_wr, "o_th": b_th, "o_ix": b_ix, "o_pk": b_pk,
             "o_hp": pt2d(o_hp), "o_kn": b_kn, "o_an": b_an, "o_hl": b_hl, "o_ft": b_ft
         }
+        for f_i in range(11):
+            pts_dict[f"f_{f_i}"] = pt2d(f_i)
 
         frame_annotated = draw_full_biomechanical_skeleton(
             frame_work, pts_dict,
-            ang_upper_arm, ang_lower_arm, ang_wrist, ang_trunk, ang_neck, wt_score
+            ang_upper_arm, ang_lower_arm, ang_wrist, ang_trunk, ang_neck, wt_score,
+            target_side_label=target_side
         )
         
         side_prefix = "右手" if target_side == "右手側" else "左手"
@@ -590,23 +560,32 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
 st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layout="wide")
 st.title("RULA 姿勢危害評估系統")
 st.markdown(
-    "> **全 33 點生物力學架構說明**：系統完整擷取**臉部五官（鼻/眼/耳/嘴）**、**手掌平面與拇指軸線（腕/拇指/食指/小指）**及**足底支撐三角（踝/腳跟/腳尖）**，同步解算上臂、前臂、手腕屈伸、手腕扭轉、頭頸、軀幹與下肢支撐之完整 RULA 矩陣。"
+    "> **全 33 點生物力學架構說明**：系統完整擷取**臉部五官 11 點網格**、**手掌平面與拇指軸線（腕/拇指/食指/小指）**、**足底支撐三角（踝/腳跟/腳尖）**與**全身雙側關節點**。支援單側獨立分析，或上傳三視角影片進行左右手分開計算、分析與擷取。"
 )
 
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
     st.session_state.df_records = None
+    st.session_state.df_right_only = None
+    st.session_state.df_left_only = None
     st.session_state.display_images_b64 = []
+    st.session_state.display_right_b64 = []
+    st.session_state.display_left_b64 = []
     st.session_state.zip_bytes = None
     st.session_state.zip_filename = "RULA_Report.zip"
-    st.session_state.analyzed_side = ""
+    st.session_state.analyzed_mode = ""
 
-target_side = st.radio(
-    "請選擇本次作業分析之【主要評估側】:",
-    options=["右手側", "左手側"],
+# 讓使用者選擇單側評估，或三鏡頭左右同步分開計算
+eval_mode = st.radio(
+    "請選擇本次作業分析之【評估模式】:",
+    options=[
+        "右手側",
+        "左手側",
+        "左右側同步計算 (需上傳正面、右手側、左手側三個視角影片)"
+    ],
     index=0,
     horizontal=True,
-    help="主評估側將以高亮力學色塊標示（含手掌三角形與拇指扭轉軸），對側則以半透明輔助骨架呈現。"
+    help="選取單側時需上傳「正面 + 該側鏡頭」；選取「左右側同步計算」時，三個鏡頭影片皆須上傳，系統將針對左右手分開計算、分析與擷取。"
 )
 
 st.header("第一步：上傳視角影片")
@@ -615,9 +594,9 @@ col_front, col_right, col_left = st.columns(3)
 with col_front:
     vid_front_file = st.file_uploader("1. 正面鏡頭 (必填: 判定外展/交叉/側傾)", type=['mp4', 'mov', 'avi'])
 with col_right:
-    vid_right_file = st.file_uploader("2. 右側鏡頭 (量測右側動作)", type=['mp4', 'mov', 'avi'])
+    vid_right_file = st.file_uploader("2. 右手側鏡頭 (量測並擷取右手側動作)", type=['mp4', 'mov', 'avi'])
 with col_left:
-    vid_left_file = st.file_uploader("3. 左側鏡頭 (量測左側動作)", type=['mp4', 'mov', 'avi'])
+    vid_left_file = st.file_uploader("3. 左手側鏡頭 (量測並擷取左手側動作)", type=['mp4', 'mov', 'avi'])
 
 st.header("第二步：等距抽樣與負載參數設定")
 col_p1, col_p2, col_p3 = st.columns(3)
@@ -630,25 +609,226 @@ with col_p3:
 
 # 執行分析按鈕
 if st.button("🚀 啟動全關節生物力學分析", type="primary", use_container_width=True):
-    selected_side_vid = vid_right_file if target_side == "右手側" else vid_left_file
-    
-    if not vid_front_file:
-        st.error("❌ 缺少【正面鏡頭影片】！正面鏡頭是用於校正水平面外展與中線穿越的必要基準。")
-    elif not selected_side_vid:
-        st.error(f"❌ 缺少【{target_side}側面影片】！您選擇評估「{target_side}」，必須提供該側面的拍攝視角進行主屈曲量測。")
+    is_dual_mode = eval_mode.startswith("左右側同步計算")
+
+    # 嚴格檢查影片上傳完整性
+    if is_dual_mode:
+        if not (vid_front_file and vid_right_file and vid_left_file):
+            st.error("❌ 您選擇了【左右側同步計算】，請務必同時上傳「1. 正面鏡頭」、「2. 右手側鏡頭」與「3. 左手側鏡頭」三個視角的影片！")
+            st.stop()
     else:
-        with st.spinner(f"系統正在進行 33 點全解剖特徵擷取與三視角聯立解算（目標：{target_side}）..."):
-            st.session_state.display_images_b64 = []
-            st.session_state.zip_bytes = None
+        selected_side_vid = vid_right_file if eval_mode == "右手側" else vid_left_file
+        if not vid_front_file:
+            st.error("❌ 缺少【正面鏡頭影片】！正面鏡頭是用於校正水平面外展與中線穿越的必要基準。")
+            st.stop()
+        elif not selected_side_vid:
+            st.error(f"❌ 缺少【{eval_mode}鏡頭影片】！您選擇評估「{eval_mode}」，必須提供該側面的拍攝視角進行主屈曲量測。")
+            st.stop()
+
+    with st.spinner(f"系統正在進行 33 點全解剖特徵擷取與 RULA 解算（模式：{eval_mode}）..."):
+        st.session_state.display_images_b64 = []
+        st.session_state.display_right_b64 = []
+        st.session_state.display_left_b64 = []
+        st.session_state.zip_bytes = None
+        gc.collect()
+
+        m_val = int(combo_muscle.split(":")[0])
+        f_val = int(combo_force.split(":")[0])
+
+        # ==================== 【模式 A：左右側同步計算 (三鏡頭分開計算、分析與擷取)】 ====================
+        if is_dual_mode:
+            t_front = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            t_front.write(vid_front_file.getvalue()); t_front.close()
+
+            t_right = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            t_right.write(vid_right_file.getvalue()); t_right.close()
+
+            t_left = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            t_left.write(vid_left_file.getvalue()); t_left.close()
+
+            cap_front = cv2.VideoCapture(t_front.name)
+            cap_right = cv2.VideoCapture(t_right.name)
+            cap_left  = cv2.VideoCapture(t_left.name)
+
+            fps = cap_right.get(cv2.CAP_PROP_FPS) or 30.0
+            total_frames = min(
+                int(cap_front.get(cv2.CAP_PROP_FRAME_COUNT)),
+                int(cap_right.get(cv2.CAP_PROP_FRAME_COUNT)),
+                int(cap_left.get(cv2.CAP_PROP_FRAME_COUNT))
+            )
+
+            if total_frames <= 0:
+                for c in [cap_front, cap_right, cap_left]: c.release()
+                for p in [t_front.name, t_right.name, t_left.name]:
+                    try: os.remove(p)
+                    except Exception: pass
+                st.error("影片解析長度為 0，請檢查影片編碼格式！")
+                st.stop()
+
+            sample_indices = np.linspace(0, total_frames - 1, num_samples, dtype=int).tolist()
+
+            combined_records = []
+            right_only_records = []
+            left_only_records = []
+            zip_right_imgs = []
+            zip_left_imgs = []
+            display_right_b64 = []
+            display_left_b64 = []
+
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            with mp.solutions.pose.Pose(
+                static_image_mode=True,
+                model_complexity=1,
+                min_detection_confidence=0.55
+            ) as pose:
+                total_samples = len(sample_indices)
+                for i, idx in enumerate(sample_indices):
+                    sec = round(idx / fps, 2)
+                    cap_front.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                    cap_right.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                    cap_left.set(cv2.CAP_PROP_POS_FRAMES, idx)
+
+                    s_f, f_frame = cap_front.read()
+                    s_r, r_frame = cap_right.read()
+                    s_l, l_frame = cap_left.read()
+
+                    if s_f and s_r and s_l:
+                        # 1. 正面鏡頭分別提取右手與左手的冠狀面外展/交叉補正
+                        _, front_mods_r = analyze_front_camera(f_frame, pose, "右手側")
+                        _, front_mods_l = analyze_front_camera(f_frame, pose, "左手側")
+
+                        # 2. 右側鏡頭獨立計算、分析與擷取【右手側】
+                        succ_r, data_r, img_r, conf_r = analyze_side_camera(r_frame, pose, "右手側", front_mods_r, m_val, f_val)
+
+                        # 3. 左側鏡頭獨立計算、分析與擷取【左手側】
+                        succ_l, data_l, img_l, conf_l = analyze_side_camera(l_frame, pose, "左手側", front_mods_l, m_val, f_val)
+
+                        if succ_r and data_r is not None:
+                            rec_r = {"樣本編號": i + 1, "時間(秒)": sec, "評估側": "右手側", "右側信賴度(%)": round(conf_r, 1)}
+                            rec_r.update(data_r)
+                            right_only_records.append(rec_r)
+
+                            img_r = put_chinese_text(img_r, f"時間: {sec}s | 獨立擷取: 右手側", (15, 15), (0, 255, 255), 20)
+                            img_r = put_chinese_text(img_r, f"右手 Grand Score: {data_r['右手 Grand Score']} 分 ({data_r['右手 AL']})", (15, 45), (0, 0, 255) if data_r['右手 Grand Score'] > 4 else (0, 255, 0), 20)
+                            img_r = put_chinese_text(img_r, f"外展:{data_r['右手上臂外展補正']} | 交叉:{data_r['右手橫越中線補正']}", (15, 75), (255, 180, 0), 16)
+
+                            oh, ow = img_r.shape[:2]
+                            out_scale = min(720 / max(oh, ow), 1.0)
+                            if out_scale < 1.0:
+                                img_r = cv2.resize(img_r, (int(ow * out_scale), int(oh * out_scale)))
+                            ok_r, buf_r = cv2.imencode(".jpg", img_r, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                            if ok_r:
+                                b_r = buf_r.tobytes()
+                                zip_right_imgs.append((f"Sample_{i+1:03d}_{sec}s_Right.jpg", b_r))
+                                cap_str_r = f"右手樣本 #{i+1} ({sec}s) | 總分: {data_r['右手 Grand Score']} ({data_r['右手 AL']}) | 手腕: {data_r['右手手腕角度']}°"
+                                display_right_b64.append((cap_str_r, base64.b64encode(b_r).decode("utf-8")))
+
+                        if succ_l and data_l is not None:
+                            rec_l = {"樣本編號": i + 1, "時間(秒)": sec, "評估側": "左手側", "左側信賴度(%)": round(conf_l, 1)}
+                            rec_l.update(data_l)
+                            left_only_records.append(rec_l)
+
+                            img_l = put_chinese_text(img_l, f"時間: {sec}s | 獨立擷取: 左手側", (15, 15), (0, 255, 255), 20)
+                            img_l = put_chinese_text(img_l, f"左手 Grand Score: {data_l['左手 Grand Score']} 分 ({data_l['左手 AL']})", (15, 45), (0, 0, 255) if data_l['左手 Grand Score'] > 4 else (0, 255, 0), 20)
+                            img_l = put_chinese_text(img_l, f"外展:{data_l['左手上臂外展補正']} | 交叉:{data_l['左手橫越中線補正']}", (15, 75), (255, 180, 0), 16)
+
+                            oh, ow = img_l.shape[:2]
+                            out_scale = min(720 / max(oh, ow), 1.0)
+                            if out_scale < 1.0:
+                                img_l = cv2.resize(img_l, (int(ow * out_scale), int(oh * out_scale)))
+                            ok_l, buf_l = cv2.imencode(".jpg", img_l, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                            if ok_l:
+                                b_l = buf_l.tobytes()
+                                zip_left_imgs.append((f"Sample_{i+1:03d}_{sec}s_Left.jpg", b_l))
+                                cap_str_l = f"左手樣本 #{i+1} ({sec}s) | 總分: {data_l['左手 Grand Score']} ({data_l['左手 AL']}) | 手腕: {data_l['左手手腕角度']}°"
+                                display_left_b64.append((cap_str_l, base64.b64encode(b_l).decode("utf-8")))
+
+                        # 若該秒左右手皆成功獨立解算，建立雙側對照總表紀錄
+                        if succ_r and succ_l and data_r is not None and data_l is not None:
+                            r_g = data_r["右手 Grand Score"]
+                            l_g = data_l["左手 Grand Score"]
+                            worst_side = "右手側" if r_g >= l_g else "左手側"
+                            final_grand = max(r_g, l_g)
+                            final_al = data_r["右手 AL"] if r_g >= l_g else data_l["左手 AL"]
+                            overall_conf = round((conf_r + conf_l) / 2.0, 1)
+
+                            comb_row = {
+                                "樣本編號": i + 1,
+                                "時間(秒)": sec,
+                                "頸部角度": round((data_r["頸部角度"] + data_l["頸部角度"]) / 2.0, 1),
+                                "軀幹角度": round((data_r["軀幹角度"] + data_l["軀幹角度"]) / 2.0, 1),
+                                "右上臂角度": data_r["右手上臂角度"],
+                                "右前臂角度": data_r["右手前臂角度"],
+                                "右手腕角度": data_r["右手手腕角度"],
+                                "右手腕扭轉": data_r["右手手腕扭轉"],
+                                "左上臂角度": data_l["左手上臂角度"],
+                                "左前臂角度": data_l["左手前臂角度"],
+                                "左手腕角度": data_l["左手手腕角度"],
+                                "左手腕扭轉": data_l["左手手腕扭轉"],
+                                "右手 Score A": data_r["右手 Score A"],
+                                "右手 Score C": data_r["右手 Score C"],
+                                "右手 Grand Score": r_g,
+                                "右手 AL": data_r["右手 AL"],
+                                "左手 Score A": data_l["左手 Score A"],
+                                "左手 Score C": data_l["左手 Score C"],
+                                "左手 Grand Score": l_g,
+                                "左手 AL": data_l["左手 AL"],
+                                "最危害側": worst_side,
+                                "最終最高分": final_grand,
+                                "最終 AL": final_al,
+                                "Overall_Conf": overall_conf
+                            }
+                            combined_records.append(comb_row)
+
+                    progress_bar.progress((i + 1) / total_samples)
+                    status_text.text(f"左右側獨立擷取與姿態解算進度: {i+1} / {total_samples} 筆完成")
+
+            for c in [cap_front, cap_right, cap_left]: c.release()
+            for p in [t_front.name, t_right.name, t_left.name]:
+                try: os.remove(p)
+                except Exception: pass
+
+            df_comb = pd.DataFrame(combined_records) if combined_records else pd.DataFrame()
+            df_r = pd.DataFrame(right_only_records) if right_only_records else pd.DataFrame()
+            df_l = pd.DataFrame(left_only_records) if left_only_records else pd.DataFrame()
+
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                if not df_comb.empty:
+                    zf.writestr("RULA_左右同步彙整報表.csv", df_comb.to_csv(index=False).encode('utf-8-sig'))
+                if not df_r.empty:
+                    zf.writestr("RULA_右手側獨立報表.csv", df_r.to_csv(index=False).encode('utf-8-sig'))
+                if not df_l.empty:
+                    zf.writestr("RULA_左手側獨立報表.csv", df_l.to_csv(index=False).encode('utf-8-sig'))
+                for fname, fbytes in zip_right_imgs:
+                    zf.writestr(f"右側鏡頭擷取照片/{fname}", fbytes)
+                for fname, fbytes in zip_left_imgs:
+                    zf.writestr(f"左側鏡頭擷取照片/{fname}", fbytes)
+
+            fixed_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            st.session_state.analysis_done = True
+            st.session_state.df_records = df_comb
+            st.session_state.df_right_only = df_r
+            st.session_state.df_left_only = df_l
+            st.session_state.display_right_b64 = display_right_b64
+            st.session_state.display_left_b64 = display_left_b64
+            st.session_state.zip_bytes = zip_buffer.getvalue()
+            st.session_state.zip_filename = f"RULA_DualSide_Separate_Report_{fixed_time_str}.zip"
+            st.session_state.analyzed_mode = "左右側同步計算"
             gc.collect()
 
+        # ==================== 【模式 B：單側評估 (右手側 或 左手側)】 ====================
+        else:
+            target_side = eval_mode
+            selected_side_vid = vid_right_file if target_side == "右手側" else vid_left_file
+
             t_front = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-            t_front.write(vid_front_file.getvalue())
-            t_front.close()
+            t_front.write(vid_front_file.getvalue()); t_front.close()
             
             t_side = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-            t_side.write(selected_side_vid.getvalue())
-            t_side.close()
+            t_side.write(selected_side_vid.getvalue()); t_side.close()
 
             cap_front = cv2.VideoCapture(t_front.name)
             cap_side = cv2.VideoCapture(t_side.name)
@@ -657,17 +837,12 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
             total_frames = min(int(cap_front.get(cv2.CAP_PROP_FRAME_COUNT)), int(cap_side.get(cv2.CAP_PROP_FRAME_COUNT)))
 
             if total_frames <= 0:
-                cap_front.release()
-                cap_side.release()
-                os.remove(t_front.name)
-                os.remove(t_side.name)
+                cap_front.release(); cap_side.release()
+                os.remove(t_front.name); os.remove(t_side.name)
                 st.error("影片解析長度為 0，請檢查影片編碼格式！")
                 st.stop()
 
             sample_indices = np.linspace(0, total_frames - 1, num_samples, dtype=int).tolist()
-
-            m_val = int(combo_muscle.split(":")[0])
-            f_val = int(combo_force.split(":")[0])
 
             records = []
             zip_images = []
@@ -703,7 +878,6 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
                             record.update(data)
                             records.append(record)
 
-                            # 左上角資訊看板標註
                             side_annotated = put_chinese_text(side_annotated, f"時間: {sec}s | 評估側: {target_side}", (15, 15), (0, 255, 255), 20)
                             side_annotated = put_chinese_text(side_annotated, f"Grand Score: {data['最終最高分']} 分 ({data['最終 AL']})", (15, 45), (0, 0, 255) if data['最終最高分'] > 4 else (0, 255, 0), 20)
                             side_annotated = put_chinese_text(side_annotated, f"外展:{data[f'{target_side[:2]}上臂外展補正']} | 交叉:{data[f'{target_side[:2]}橫越中線補正']}", (15, 75), (255, 180, 0), 16)
@@ -726,11 +900,9 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
                     progress_bar.progress((i + 1) / total_samples)
                     status_text.text(f"全關節姿態解算進度: {i+1} / {total_samples} 筆完成")
 
-            cap_front.release()
-            cap_side.release()
+            cap_front.release(); cap_side.release()
             try:
-                os.remove(t_front.name)
-                os.remove(t_side.name)
+                os.remove(t_front.name); os.remove(t_side.name)
             except Exception:
                 pass
 
@@ -751,13 +923,14 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
             st.session_state.display_images_b64 = display_images_b64
             st.session_state.zip_bytes = zip_buffer.getvalue()
             st.session_state.zip_filename = f"RULA_{side_en_tag}_Report_{fixed_time_str}.zip"
-            st.session_state.analyzed_side = target_side
+            st.session_state.analyzed_mode = target_side
             gc.collect()
 
 # ==================== 【網頁即時成果展示與打包下載區】 ====================
 if st.session_state.analysis_done:
     st.divider()
-    st.success(f"✅ 【{st.session_state.analyzed_side}】全 33 點多視角生物力學解算完成！以下為即時分析結果：")
+    mode_now = st.session_state.analyzed_mode
+    st.success(f"✅ 【{mode_now}】全 33 點生物力學解算完成！以下為即時分析結果：")
     
     df_show = st.session_state.df_records
     
@@ -767,40 +940,119 @@ if st.session_state.analysis_done:
         avg_score = df_show["最終最高分"].mean()
         max_score = df_show["最終最高分"].max()
         high_risk_pct = (df_show["最終最高分"] >= 5).mean() * 100
-        avg_conf = df_show["視角信賴度(%)"].mean()
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("平均 RULA 總分", f"{avg_score:.2f} 分")
-        m2.metric("最高風險峰值", f"{max_score} 分")
-        m3.metric("高危害佔比 (AL3/AL4)", f"{high_risk_pct:.1f}%")
-        m4.metric("平均視角信賴度", f"{avg_conf:.1f}%")
+        if mode_now == "左右側同步計算":
+            r_avg = df_show["右手 Grand Score"].mean()
+            l_avg = df_show["左手 Grand Score"].mean()
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("最終平均最高分", f"{avg_score:.2f} 分")
+            m2.metric("右手獨立平均總分", f"{r_avg:.2f} 分")
+            m3.metric("左手獨立平均總分", f"{l_avg:.2f} 分")
+            m4.metric("最高風險峰值", f"{max_score} 分")
+            m5.metric("高危害佔比 (AL3/AL4)", f"{high_risk_pct:.1f}%")
+        else:
+            avg_conf = df_show["視角信賴度(%)"].mean()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("平均 RULA 總分", f"{avg_score:.2f} 分")
+            m2.metric("最高風險峰值", f"{max_score} 分")
+            m3.metric("高危害佔比 (AL3/AL4)", f"{high_risk_pct:.1f}%")
+            m4.metric("平均視角信賴度", f"{avg_conf:.1f}%")
 
         # 2. 互動式數據報表
-        st.subheader("📊 詳細抽樣數據報表（含手腕屈伸、手腕扭轉與足底支撐）")
-        st.dataframe(df_show, use_container_width=True)
+        if mode_now == "左右側同步計算":
+            st.subheader("📊 詳細抽樣數據報表（可切換檢視：雙側對照總表 / 右手獨立表 / 左手獨立表）")
+            tab_comb, tab_r, tab_l = st.tabs(["📋 左右雙側對照總表", "👉 右手側獨立分析表", "👈 左手側獨立分析表"])
+            with tab_comb:
+                st.dataframe(df_show, use_container_width=True)
+            with tab_r:
+                st.dataframe(st.session_state.df_right_only, use_container_width=True)
+            with tab_l:
+                st.dataframe(st.session_state.df_left_only, use_container_width=True)
+        else:
+            st.subheader("📊 詳細抽樣數據報表")
+            st.dataframe(df_show, use_container_width=True)
 
         # 3. 瀏覽器本地直出 ZIP 下載按鈕
         st.subheader("📦 匯出完整稽核報告")
         render_blob_download_button(
             st.session_state.zip_bytes,
             st.session_state.zip_filename,
-            f"📥 點此直接下載 {st.session_state.analyzed_side} RULA 分析報告與照片庫 (ZIP)"
+            f"📥 點此直接下載【{mode_now}】RULA 報表與獨立擷取照片庫 (ZIP)"
         )
 
         # 4. Base64 內嵌影像預覽畫廊
-        st.subheader("🖼️ 抽樣標註照片預覽（含五官網格、手掌拇指三角、足底支撐三角）")
-        with st.expander("點此展開 / 收合所有抽樣標註照片", expanded=True):
-            gallery_cols = st.columns(3)
-            for idx, (cap_text, b64_str) in enumerate(st.session_state.display_images_b64):
-                with gallery_cols[idx % 3]:
-                    st.markdown(
-                        f"""
-                        <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
-                            <img src="data:image/jpeg;base64,{b64_str}" style="width:100%; border-radius:6px;">
-                            <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_text}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+        st.subheader("🖼️ 抽樣標註照片預覽（含五官網格、手掌拇指三角、足底支撐三角與全身雙側骨架）")
+        if mode_now == "左右側同步計算":
+            tab_img_pair, tab_img_r, tab_img_l = st.tabs([
+                "👀 左右鏡頭同步對照檢視",
+                "📸 右手側鏡頭獨立擷取照",
+                "📸 左手側鏡頭獨立擷取照"
+            ])
+            with tab_img_pair:
+                pair_count = min(len(st.session_state.display_right_b64), len(st.session_state.display_left_b64))
+                for idx in range(pair_count):
+                    c_r, c_l = st.columns(2)
+                    cap_r, b64_r = st.session_state.display_right_b64[idx]
+                    cap_l, b64_l = st.session_state.display_left_b64[idx]
+                    with c_r:
+                        st.markdown(
+                            f"""
+                            <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
+                                <img src="data:image/jpeg;base64,{b64_r}" style="width:100%; border-radius:6px;">
+                                <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_r}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    with c_l:
+                        st.markdown(
+                            f"""
+                            <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
+                                <img src="data:image/jpeg;base64,{b64_l}" style="width:100%; border-radius:6px;">
+                                <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_l}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+            with tab_img_r:
+                cols_r = st.columns(3)
+                for idx, (cap_text, b64_str) in enumerate(st.session_state.display_right_b64):
+                    with cols_r[idx % 3]:
+                        st.markdown(
+                            f"""
+                            <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
+                                <img src="data:image/jpeg;base64,{b64_str}" style="width:100%; border-radius:6px;">
+                                <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_text}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+            with tab_img_l:
+                cols_l = st.columns(3)
+                for idx, (cap_text, b64_str) in enumerate(st.session_state.display_left_b64):
+                    with cols_l[idx % 3]:
+                        st.markdown(
+                            f"""
+                            <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
+                                <img src="data:image/jpeg;base64,{b64_str}" style="width:100%; border-radius:6px;">
+                                <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_text}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+        else:
+            with st.expander("點此展開 / 收合所有抽樣標註照片", expanded=True):
+                gallery_cols = st.columns(3)
+                for idx, (cap_text, b64_str) in enumerate(st.session_state.display_images_b64):
+                    with gallery_cols[idx % 3]:
+                        st.markdown(
+                            f"""
+                            <div style="text-align:center; margin-bottom:16px; background:#1e1e1e; padding:8px; border-radius:8px;">
+                                <img src="data:image/jpeg;base64,{b64_str}" style="width:100%; border-radius:6px;">
+                                <div style="font-size:13px; color:#ddd; margin-top:6px;">{cap_text}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
     else:
         st.warning("⚠️ 影片中未偵測到有效的人體姿態關鍵點，請確認影片人物是否清晰完整。")
