@@ -751,6 +751,9 @@ st.markdown(
     "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 的手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
 )
 
+if "v4_overrides" not in st.session_state:
+    st.session_state.v4_overrides = {}
+
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
     st.session_state.df_records = None
@@ -870,6 +873,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
             st.stop()
 
     with st.spinner(f"系統正在進行 33 點全解剖特徵擷取與 RULA 解算（模式：{eval_mode}）..."):
+        st.session_state.v4_overrides = {}
         st.session_state.display_images_b64 = []
         st.session_state.display_right_b64 = []
         st.session_state.display_left_b64 = []
@@ -1232,6 +1236,181 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
             st.session_state.skipped_info = {"expected": total_samples, "single": skipped_count}
             gc.collect()
 
+# ==================== 【V4：時間異常檢測／逐影格人工複核】 ====================
+# 警示閾值是工程篩檢參數，不是已驗證的人體角度準確性標準。
+V4_JUMP_THRESHOLD_DEG = 45.0
+V4_WRIST_2D3D_GAP_DEG = 25.0
+
+
+def v4_mark_anomalies(df, side):
+    """每個評估側獨立計算警示；前後差異大只代表需複核，並非判定錯誤。"""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    data = df.copy().sort_values("時間(秒)").reset_index(drop=True)
+    prefix = "右手" if side == "右手側" else "左手"
+    checks = [("頸部角度", "頸部"), ("軀幹角度", "軀幹"),
+              (f"{prefix}上臂角度", "上臂"), (f"{prefix}前臂角度", "前臂"),
+              (f"{prefix}手腕角度", "手腕")]
+    reasons = [[] for _ in range(len(data))]
+    for col, label in checks:
+        if col not in data.columns:
+            continue
+        vals = pd.to_numeric(data[col], errors="coerce")
+        for i, value in enumerate(vals):
+            if pd.isna(value):
+                reasons[i].append(f"{label}角度缺失")
+            elif (label == "手腕" and value > 60) or (label == "前臂" and value > 150) or (label == "軀幹" and value > 100):
+                reasons[i].append(f"{label}極端角度 {value:.1f}°")
+            if i > 0 and pd.notna(value) and pd.notna(vals.iloc[i - 1]):
+                jump = abs(float(value) - float(vals.iloc[i - 1]))
+                if jump >= V4_JUMP_THRESHOLD_DEG:
+                    reasons[i].append(f"{label}相鄰樣本差 {jump:.1f}°")
+                    reasons[i - 1].append(f"{label}與下一樣本差 {jump:.1f}°")
+    flag_col = f"{prefix}手腕角度需複核"
+    for i, row in data.iterrows():
+        if flag_col in data.columns and str(row[flag_col]).lower() in ("true", "1", "是"):
+            reasons[i].append("手腕2D/3D分歧或角度過大")
+    data["自動複核警示"] = ["；".join(dict.fromkeys(rs)) for rs in reasons]
+    data["需要複核"] = data["自動複核警示"].str.len() > 0
+    data["評估側"] = side
+    return data
+
+
+def v4_recalculate_from_scores(row, updates, side):
+    """使用人工指定的各部位 RULA 分數重新查表；不更動原始角度。"""
+    prefix = "右手" if side == "右手側" else "左手"
+    vals = {
+        "ua": int(updates["上臂"]), "la": int(updates["前臂"]),
+        "w": int(updates["手腕"]), "wt": int(updates["腕扭轉"]),
+        "nk": int(updates["頸部"]), "tk": int(updates["軀幹"]),
+        "lg": int(updates["腿部"]), "muscle": int(updates["肌肉"]),
+        "force": int(updates["負重"]),
+    }
+    a, b, c, d, total, al = compute_rula_full(vals["ua"], vals["la"], vals["w"], vals["wt"],
+                                                  vals["nk"], vals["tk"], vals["lg"], vals["muscle"], vals["force"])
+    return {"樣本編號": int(row["樣本編號"]), "時間(秒)": float(row["時間(秒)"]), "評估側": side,
+            "原始Grand Score": int(row[f"{prefix} Grand Score"]), "人工Grand Score": total,
+            "原始AL": row[f"{prefix} AL"], "人工AL": al,
+            "人工Score A": a, "人工Score B": b, "人工Score C": c, "人工Score D": d,
+            **{f"人工{key}分數": v for key, v in updates.items()},
+            "異動說明": "逐影格分數覆核（未修改原始骨架角度）"}
+
+
+def v4_make_zip(original_zip, reviews, anomaly_frames):
+    """將原始報告與人工覆核結果一起下載，保留原始資料供比對。"""
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original_zip), "r") as original, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in original.infolist():
+            dst.writestr(info, original.read(info.filename))
+        dst.writestr("Diagnostics/V4_Anomaly_Review.csv", anomaly_frames.to_csv(index=False).encode("utf-8-sig"))
+        dst.writestr("Diagnostics/V4_Manual_Overrides.csv", pd.DataFrame(list(reviews.values())).to_csv(index=False).encode("utf-8-sig"))
+        dst.writestr("Diagnostics/V4_README.txt", "自動警示不等於辨識錯誤。人工修正修改的是逐影格 RULA 分數，原始角度、原始影像與原始 CSV 均未覆蓋。請另行使用標準工作表核對 RULA 查表內容。".encode("utf-8"))
+    return out.getvalue()
+
+
+def v4_show_review_center():
+    st.header("🧪 V4：異常影格審核中心／人工修正／風險時間軸")
+    mode = st.session_state.analyzed_mode
+    both = mode == "左右側同步計算"
+    available = {}
+    if both:
+        available = {"右手側": st.session_state.df_right_only, "左手側": st.session_state.df_left_only}
+    else:
+        available = {mode: st.session_state.df_records}
+    available = {k: v for k, v in available.items() if v is not None and not v.empty}
+    if not available:
+        st.info("目前沒有可供複核的有效樣本。")
+        return
+
+    all_checked = pd.concat([v4_mark_anomalies(df, side) for side, df in available.items()], ignore_index=True)
+    t1, t2, t3 = st.tabs(["🚩 異常影格審核中心", "✍️ 逐影格人工修正與重算", "📈 RULA 動作風險時間軸"])
+    with t1:
+        flagged = all_checked[all_checked["需要複核"]]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("有效評估筆數", len(all_checked))
+        c2.metric("待複核筆數", len(flagged))
+        c3.metric("警示占比", f"{len(flagged) / len(all_checked):.1%}")
+        st.caption("警示由相鄰角度跳動、極端值及原始手腕 2D/3D 差異組成；不能直接當成模型準確度或誤判率。")
+        if flagged.empty:
+            st.success("沒有觸發目前的工程警示閾值；仍建議抽樣人工核對。")
+        else:
+            st.dataframe(flagged[["評估側", "樣本編號", "時間(秒)", "最終最高分", "自動複核警示"]], use_container_width=True, hide_index=True)
+        side = st.selectbox("選擇要查看照片的評估側", list(available), key="v4_review_side")
+        side_data = v4_mark_anomalies(available[side], side)
+        only_flagged = st.checkbox("只列出有警示的影格", value=True, key="v4_only_flags")
+        candidates = side_data[side_data["需要複核"]] if only_flagged else side_data
+        if len(candidates):
+            ids = candidates["樣本編號"].astype(int).tolist()
+            chosen = st.selectbox("樣本編號", ids, key="v4_photo_id")
+            found = side_data[side_data["樣本編號"] == chosen].iloc[0]
+            st.write(f"{found['時間(秒)']} 秒 ｜ 原始 RULA {found['最終最高分']} ｜ {found['自動複核警示'] or '無警示'}")
+            images = (st.session_state.display_right_b64 if side == "右手側" else st.session_state.display_left_b64) if both else st.session_state.display_images_b64
+            import re
+            for caption, payload in images:
+                match = re.search(r"#(\d+)", caption)
+                if match and int(match.group(1)) == int(chosen):
+                    st.image(base64.b64decode(payload), caption=caption, use_container_width=True)
+                    break
+        else:
+            st.info("此評估側沒有符合條件的影格，可取消勾選警示篩選。")
+
+    with t2:
+        st.caption("這是可選的人工覆核工具，不影響原始自動分析。僅修改指定樣本的各部位分數，重新查表並保留原始資料。")
+        side = st.selectbox("評估側", list(available), key="v4_edit_side")
+        df = available[side].sort_values("樣本編號")
+        ids = df["樣本編號"].astype(int).tolist()
+        sample = st.selectbox("選擇欲修正的樣本", ids, key="v4_edit_sample")
+        row = df[df["樣本編號"].astype(int) == sample].iloc[0]
+        prefix = "右手" if side == "右手側" else "左手"
+        defaults = {"上臂": (f"{prefix}上臂分數", 1, 6), "前臂": (f"{prefix}前臂分數", 1, 3),
+                    "手腕": (f"{prefix}手腕分數", 1, 4), "腕扭轉": (f"{prefix}手腕扭轉分數", 1, 2),
+                    "頸部": ("頸部分數", 1, 6), "軀幹": ("軀幹分數", 1, 6),
+                    "腿部": ("腿部分數", 1, 2), "肌肉": ("肌肉使用加分", 0, 1),
+                    "負重": ("負重施力加分", 0, 3)}
+        key = (side, int(sample))
+        previous = st.session_state.v4_overrides.get(key, {})
+        with st.form(f"v4_override_{side}_{sample}"):
+            fields = st.columns(3)
+            values = {}
+            for i, (label, (col, low, high)) in enumerate(defaults.items()):
+                value = int(previous.get(f"人工{label}分數", row[col]))
+                values[label] = fields[i % 3].number_input(f"{label}分數", min_value=low, max_value=high, value=max(low, min(high, value)), step=1)
+            if st.form_submit_button("重新計分並儲存本影格覆核結果", type="primary"):
+                result = v4_recalculate_from_scores(row, values, side)
+                st.session_state.v4_overrides[key] = result
+                st.success(f"已儲存：原始 {result['原始Grand Score']} 分 → 複核後 {result['人工Grand Score']} 分（{result['人工AL']}）")
+        if key in st.session_state.v4_overrides:
+            result = st.session_state.v4_overrides[key]
+            st.metric("本影格複核後分數", result["人工Grand Score"], delta=result["人工Grand Score"] - result["原始Grand Score"])
+            if st.button("撤銷這一筆人工修正", key=f"v4_undo_{side}_{sample}"):
+                del st.session_state.v4_overrides[key]
+                st.rerun()
+        st.subheader("已保存的逐影格修正")
+        if st.session_state.v4_overrides:
+            st.dataframe(pd.DataFrame(st.session_state.v4_overrides.values()), use_container_width=True, hide_index=True)
+        else:
+            st.info("目前沒有人工修正，原始分數維持不變。")
+
+    with t3:
+        st.caption("以每個影格的原始 RULA Grand Score 繪製；如有人工修正，另以修正後分數作比較。時間間距依影片取樣而定。")
+        side = st.selectbox("時間軸評估側", list(available), key="v4_chart_side")
+        series = available[side].sort_values("時間(秒)").copy()
+        prefix = "右手" if side == "右手側" else "左手"
+        series["原始RULA"] = pd.to_numeric(series[f"{prefix} Grand Score"], errors="coerce")
+        series["修正後RULA"] = series["原始RULA"].copy()
+        for idx, row in series.iterrows():
+            edit = st.session_state.v4_overrides.get((side, int(row["樣本編號"])))
+            if edit:
+                series.loc[idx, "修正後RULA"] = edit["人工Grand Score"]
+        chart = series[["時間(秒)", "原始RULA", "修正後RULA"]].set_index("時間(秒)")
+        st.line_chart(chart, y_label="RULA 分數（1～7）", x_label="影片時間（秒）")
+        st.dataframe(series[["樣本編號", "時間(秒)", "原始RULA", "修正後RULA"]], use_container_width=True, hide_index=True)
+
+    st.subheader("📦 下載含異常清單與人工覆核紀錄的完整 ZIP")
+    enhanced = v4_make_zip(st.session_state.zip_bytes, st.session_state.v4_overrides, all_checked)
+    st.download_button("下載 V4 完整 ZIP（原始資料＋審核結果）", enhanced, file_name="RULA_V4_Review_Report.zip", mime="application/zip", key="v4_download")
+
+
 # ==================== 【網頁即時成果展示與打包下載區】 ====================
 if st.session_state.analysis_done:
     st.divider()
@@ -1276,6 +1455,8 @@ if st.session_state.analysis_done:
             m4.metric("平均視角信賴度", f"{avg_conf:.1f}%")
 
         st.info("每個成功樣本現在都會輸出關節分數、Score A/B/C/D 與加分欄位；手腕 2D/3D 角度差異過大或超過 60° 時會標記人工複核。ZIP 內另有略過影格診斷 CSV。")
+
+        v4_show_review_center()
 
         # 2. 互動式數據報表
         if mode_now == "左右側同步計算":
