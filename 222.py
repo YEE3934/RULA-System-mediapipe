@@ -16,6 +16,12 @@ import tempfile
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
+# Streamlit Cloud: keep MediaPipe legacy Pose at complexity 1.
+# Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
+# which is typically read-only on hosted deployments.
+POSE_MODEL_COMPLEXITY = 1
+APP_BUILD_TAG = "RULA_CLOUD_POSE_FIX_2026-10-24_v2"
+
 # ==================== 【正統 RULA 查表矩陣】 ====================
 TABLE_A = {
     1: { 1: {1: {1:1, 2:2}, 2: {1:2, 2:2}, 3: {1:2, 2:3}, 4: {1:3, 2:3}},
@@ -723,6 +729,7 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
 # ==================== 【Streamlit 網頁應用介面】 ====================
 st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layout="wide")
 st.title("RULA 姿勢危害評估系統")
+st.caption(f"部署版本：{APP_BUILD_TAG}｜執行檔：{os.path.basename(__file__)}｜MediaPipe Pose complexity={POSE_MODEL_COMPLEXITY}")
 st.markdown(
     "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 的手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
 )
@@ -907,7 +914,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
 
             with mp.solutions.pose.Pose(
                 static_image_mode=True,
-                model_complexity=1,
+                model_complexity=POSE_MODEL_COMPLEXITY,
                 min_detection_confidence=0.50
             ) as pose:
                 total_samples = len(sample_times)
@@ -1111,7 +1118,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
 
             with mp.solutions.pose.Pose(
                 static_image_mode=True,
-                model_complexity=2,
+                model_complexity=POSE_MODEL_COMPLEXITY,
                 min_detection_confidence=0.50
             ) as pose:
                 total_samples = len(sample_times)
