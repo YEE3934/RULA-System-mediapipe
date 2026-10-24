@@ -507,42 +507,60 @@ def analyze_front_camera(frame, pose_model, target_side):
 
     sh_left, sh_right = xy(11), xy(12)
     hp_left, hp_right = xy(23), xy(24)
-    midline_x = float(np.mean([sh_left[0], sh_right[0], hp_left[0], hp_right[0]]))
-    shoulder_width = max(float(np.linalg.norm(sh_left - sh_right)), 1.0)
-
-    target_shoulder_x = xy(sh_idx)[0]
-    elbow_x = xy(el_idx)[0]
-    wrist_x = xy(wr_idx)[0]
-
-    # 使用絕對水平位移判斷外展，降低左右鏡像影片造成的符號錯誤。
-    is_abducted = abs(elbow_x - target_shoulder_x) > shoulder_width * 0.35
-    # 依該側肩膀相對身體中線的位置決定「跨到對側」，不假設右手一定在影像右邊。
-    side_direction = np.sign(target_shoulder_x - midline_x)
-    is_across_midline = bool(side_direction != 0 and (wrist_x - midline_x) * side_direction < 0)
-
-    # RULA 前臂「跨中線或向外側工作」只加一次分；這裡以外側偏移作為保守代理值，需目視複核。
-    elbow_x_from_midline = abs(xy(el_idx)[0] - midline_x)
-    wrist_x_from_midline = abs(wrist_x - midline_x)
-    is_out_to_side = bool(
-        not is_across_midline
-        and elbow_x_from_midline > shoulder_width * 0.55
-        and wrist_x_from_midline > shoulder_width * 0.65
-    )
-
-    shoulder_tilt_ratio = abs(sh_left[1] - sh_right[1]) / shoulder_width
-    is_trunk_side_bending = shoulder_tilt_ratio > 0.12
-
+    # 人體相對座標：肩線決定水平軸，雙肩/雙髖中點決定軀幹軸。
+    # 避免畫面傾斜時直接把影像 X 位移誤認成「跨中線」。
+    shoulder_mid = (sh_left + sh_right) * 0.5
+    hip_mid = (hp_left + hp_right) * 0.5
+    shoulder_vec = sh_right - sh_left
+    shoulder_width = float(np.linalg.norm(shoulder_vec))
+    torso_vec = hip_mid - shoulder_mid
+    torso_length = float(np.linalg.norm(torso_vec))
+    if shoulder_width < 12.0 or torso_length < 16.0:
+        return False, {}
+    horiz = shoulder_vec / shoulder_width
+    torso_axis = torso_vec / torso_length
+    # 正面旋轉程度以世界座標的肩線深度相對肩寬估計，僅用來降低品質評級。
+    # 此數值不是相機標定或準確率。
+    world = getattr(results, "pose_world_landmarks", None)
+    rotation_warning = False
+    if world is not None:
+        wlm = world.landmark
+        shoulder_depth_delta = abs(float(wlm[12].z - wlm[11].z))
+        shoulder_world_width = float(np.linalg.norm([wlm[12].x-wlm[11].x, wlm[12].y-wlm[11].y, wlm[12].z-wlm[11].z]))
+        rotation_warning = shoulder_depth_delta / max(shoulder_world_width, 1e-6) > 0.55
+    # 目標側肩膀位於軸向哪一邊，避免鏡像影像造成左右符號反轉。
+    target_sh = xy(sh_idx)
+    elbow = xy(el_idx)
+    wrist = xy(wr_idx)
+    side_sign = float(np.sign(np.dot(target_sh - shoulder_mid, horiz)))
+    if side_sign == 0:
+        return False, {}
+    elbow_out = side_sign * float(np.dot(elbow - target_sh, horiz)) / shoulder_width
+    wrist_midline = side_sign * float(np.dot(wrist - shoulder_mid, horiz)) / shoulder_width
+    elbow_midline = side_sign * float(np.dot(elbow - shoulder_mid, horiz)) / shoulder_width
+    # 只把具有明確幾何證據的情況視為 True，設中性帶避免邊界抖動。
+    is_abducted = bool(elbow_out > 0.33)
+    is_across_midline = bool(wrist_midline < -0.12)
+    is_out_to_side = bool(not is_across_midline and elbow_midline > 0.65 and wrist_midline > 0.80)
+    # 軀幹左右傾斜用骨盆中點到肩中點相對鉛垂線，避免單邊聳肩造成假陽性。
+    trunk_lateral_angle = float(np.degrees(np.arctan2(abs(shoulder_mid[0] - hip_mid[0]), max(abs(shoulder_mid[1] - hip_mid[1]), 1e-6))))
+    # 耳中點相對肩中點的側移，與軀幹偏斜量相減，用於估測頸部相對側彎。
     ear_left, ear_right = xy(7), xy(8)
-    ear_tilt_ratio = abs(ear_left[1] - ear_right[1]) / shoulder_width
-    is_neck_side_bending = ear_tilt_ratio > 0.15
-
+    ear_mid = (ear_left + ear_right) * 0.5
+    ear_axis = ear_mid - shoulder_mid
+    neck_relative_angle = float(np.degrees(np.arctan2(abs(np.cross(-torso_axis, ear_axis)), max(abs(np.dot(-torso_axis, ear_axis)), 1e-6)))) if np.linalg.norm(ear_axis) >= 5 else 0.0
+    # 以上都是影像代理規則；不能單憑這些數據宣稱臨床準確。
     mods = {
-        "is_abducted": bool(is_abducted),
-        "is_across_midline": bool(is_across_midline),
-        "is_out_to_side": bool(is_out_to_side),
-        "is_side_bending": bool(is_trunk_side_bending),
-        "is_neck_side_bending": bool(is_neck_side_bending),
+        "is_abducted": is_abducted,
+        "is_across_midline": is_across_midline,
+        "is_out_to_side": is_out_to_side,
+        "is_side_bending": bool(trunk_lateral_angle > 12.0),
+        "is_neck_side_bending": bool(neck_relative_angle > 14.0),
         "front_keypoint_visibility": float(np.mean(_visibility_values(results, required)) * 100.0),
+        "front_rotation_warning": rotation_warning,
+        "cross_midline_normalized": round(wrist_midline, 3),
+        "trunk_lateral_angle_proxy": round(trunk_lateral_angle, 1),
+        "neck_lateral_angle_proxy": round(neck_relative_angle, 1),
     }
     return True, mods
 
@@ -551,6 +569,13 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
     if frame is None or frame.size == 0 or not isinstance(front_mods, dict):
         return False, None, frame, 0.0
     manual_mods = manual_mods or {}
+    auto_selection = manual_mods.get("auto_selection", {})
+    manual_front = manual_mods.get("manual_front", {})
+    front_mods = dict(front_mods)
+    for flag in ("is_abducted", "is_across_midline", "is_out_to_side", "is_side_bending", "is_neck_side_bending"):
+        if not auto_selection.get(flag, True):
+            front_mods[flag] = bool(manual_front.get(flag, False))
+    # 對於鏡頭轉身造成的視角不佳，保留警告，不把模型 visibility 當準確率。
     orig_h, orig_w = frame.shape[:2]
     scale = min(1000 / max(orig_h, orig_w), 1.0)
     work_w, work_h = max(1, int(orig_w * scale)), max(1, int(orig_h * scale))
@@ -647,13 +672,31 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         if not np.isfinite(ang_lower_arm) or not np.isfinite(ang_upper_arm) or not np.isfinite(ang_trunk) or not np.isfinite(ang_neck) or not np.isfinite(ang_wrist):
             return False, None, frame_work, conf_side
 
-        # RULA 查表計算；不可由單一 2D 側面可靠辨識的條件由使用者補正。
+        # 上臂向後伸展：側面鼻尖指向作為身體朝前的代理方向。
+        # 側視不足／臉部遮擋時，回到人工輸入，而不是默認「沒有後伸」。
+        auto_extension_used = False
+        auto_extension_warning = ""
+        is_extended = bool(manual_mods.get("upper_arm_extended", False))
+        if auto_selection.get("upper_arm_extended", False):
+            nose_visible = float(getattr(n_lm[0], "visibility", 0.0)) >= 0.45
+            face_forward_delta = float(pt2d(0)[0] - sh[0]) if nose_visible else 0.0
+            upper_arm_delta = float(el[0] - sh[0])
+            arm_length = float(np.linalg.norm(el - sh))
+            # 朝向清楚且上臂後移超過約 20° 才自動判定；其餘仍標註幾何限制。
+            if nose_visible and abs(face_forward_delta) > max(12.0, 0.15 * torso_len) and arm_length > 15:
+                backward_projection = -np.sign(face_forward_delta) * upper_arm_delta / arm_length
+                is_extended = bool(backward_projection > np.sin(np.radians(20.0)) and ang_upper_arm > 20.0)
+                auto_extension_used = True
+            else:
+                auto_extension_warning = "側面朝向不明，使用人工設定"
+
+        # RULA 查表計算；不可由影像可靠辨識的條件繼續採用人工輸入。
         s_ua = get_upper_arm_score(
             ang_upper_arm,
             is_abducted=front_mods.get("is_abducted", False),
             is_raised=manual_mods.get("shoulder_raised", False),
             is_supported=manual_mods.get("arm_supported", False),
-            is_extended=manual_mods.get("upper_arm_extended", False),
+            is_extended=is_extended,
         )
         s_la = get_lower_arm_score(
             ang_lower_arm,
@@ -710,7 +753,7 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             f"{side_prefix}上臂外展補正": "是 (+1分)" if front_mods.get("is_abducted") else "否",
             f"{side_prefix}肩部抬高補正": "是 (+1分)" if manual_mods.get("shoulder_raised") else "否（人工確認）",
             f"{side_prefix}上臂支撐／倚靠補正": "是 (-1分)" if manual_mods.get("arm_supported") else "否（人工確認）",
-            f"{side_prefix}上臂向後伸展補正": "是（基礎分至少 2）" if manual_mods.get("upper_arm_extended") else "否（人工確認）",
+            f"{side_prefix}上臂向後伸展補正": "是（後伸）" if is_extended else "否",
             f"{side_prefix}橫越中線補正": "是 (+1分)" if front_mods.get("is_across_midline") else "否",
             f"{side_prefix}前臂向外側工作補正": "是 (+1分)" if front_mods.get("is_out_to_side") else "否（影像代理判斷）",
             "軀幹側彎補正": "是 (+1分)" if front_mods.get("is_side_bending") else "否（影像代理判斷）",
@@ -718,6 +761,13 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             "軀幹向後伸展": "是（軀幹基礎分 2）" if manual_mods.get("trunk_extended") else "否（人工確認）",
             "頸部扭轉補正": "是 (+1分)" if manual_mods.get("neck_twisted") else "否（人工確認）",
             "頸部後仰／伸展": "是（頸部基礎分 4）" if manual_mods.get("neck_extended") else "否（人工確認）",
+            "自動辨識設定": ", ".join(k for k, v in auto_selection.items() if v) or "未啟用",
+            "正面鏡頭轉向提醒": bool(front_mods.get("front_rotation_warning", False)),
+            "跨越中線標準化位移": front_mods.get("cross_midline_normalized", np.nan),
+            "軀幹側彎代理角度": front_mods.get("trunk_lateral_angle_proxy", np.nan),
+            "頸部側彎代理角度": front_mods.get("neck_lateral_angle_proxy", np.nan),
+            "上臂後伸自動判定成功": auto_extension_used,
+            "上臂後伸判定備註": auto_extension_warning,
             f"{side_prefix}上臂分數": s_ua,
             f"{side_prefix}前臂分數": s_la,
             f"{side_prefix}手腕分數": s_wr,
@@ -748,7 +798,7 @@ st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layo
 st.title("RULA 姿勢危害評估系統")
 st.caption(f"部署版本：{APP_BUILD_TAG}｜執行檔：{os.path.basename(__file__)}｜MediaPipe Pose complexity={POSE_MODEL_COMPLEXITY}")
 st.markdown(
-    "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 的手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
+    "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 部分影像補正可選擇自動判讀；手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目仍需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
 )
 
 if "v4_overrides" not in st.session_state:
@@ -800,38 +850,68 @@ with col_p3:
     combo_force = st.selectbox("負載與施力 (Force/Load):", ["0: < 2kg (間歇施力)", "1: 2-10kg (間歇施力)", "2: 2-10kg 靜態／重複施力", "3: >10kg 負載、重複施力或衝擊力"])
 
 
-st.header("第三步：人工確認無法由單一影像可靠判斷的 RULA 條件")
-st.caption("以下補正會套用到整段影片的每個抽樣點；若姿勢在影片中變化很大，請逐張複核結果。腿足支撐與手腕扭轉不再由錯誤的影像幾何猜測。")
+st.header("第三步：自動辨識設定")
+st.caption("逐項選擇是否使用影像向量自動判斷；未勾選者由使用者手動設定。影像判斷為代理演算法，遮擋、轉身或不同步可能影響結果。")
+AUTO_FLAGS = {
+    "is_abducted": "上臂外展（正面肩肘相對位置）",
+    "is_across_midline": "前臂跨越身體中線（正面向量投影）",
+    "is_out_to_side": "前臂向外側工作（正面位置）",
+    "is_side_bending": "軀幹側彎（肩髖中心線）",
+    "is_neck_side_bending": "頸部側彎（頭頸相對軀幹）",
+    "upper_arm_extended": "上臂向後伸展（側面朝向判斷；實驗性）",
+}
+auto_selection = {}
+manual_front = {}
+front_labels = {
+    "is_abducted": "上臂外展（+1）",
+    "is_across_midline": "前臂跨中線（+1）",
+    "is_out_to_side": "前臂向外側工作（+1）",
+    "is_side_bending": "軀幹側彎（+1）",
+    "is_neck_side_bending": "頸部側彎（+1）",
+}
+with st.container():
+    auto_cols = st.columns(2)
+    for pos, (flag, caption) in enumerate(AUTO_FLAGS.items()):
+        with auto_cols[pos % 2]:
+            auto_selection[flag] = st.checkbox("自動辨識｜" + caption, value=(flag != "upper_arm_extended"), key="v5_auto_"+flag)
+    with st.expander("手動判斷：僅顯示未啟用自動辨識的條件", expanded=True):
+        for flag, caption in front_labels.items():
+            if not auto_selection[flag]:
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    manual_front[("右手側", flag)] = st.checkbox("右側｜" + caption, value=False, key="v5_manual_right_"+flag)
+                with mc2:
+                    manual_front[("左手側", flag)] = st.checkbox("左側｜" + caption, value=False, key="v5_manual_left_"+flag)
+
+st.subheader("仍需人工輸入的項目")
+st.caption("以下項目不能單靠 33 點 Pose 可靠判定，包括實際受力、支撐及前臂旋轉；本版保留人工選項。未啟用上臂後伸自動判斷時，亦由使用者自行勾選。")
 mod_col_a, mod_col_b, mod_col_c = st.columns(3)
 with mod_col_a:
-    leg_support_choice = st.selectbox(
-        "腿與足部支撐／平衡（必選）",
-        ["請先目視確認…", "腿足受支撐且平衡（1分）", "腿足未受支撐或不平衡（2分）"],
-        index=0,
-        help="RULA 腿部評分需要判斷是否有支撐且平衡；單靠側面關鍵點高度無法可靠判斷。"
-    )
+    leg_support_choice = st.selectbox("腿與足部支撐／平衡（必選）", ["請先目視確認…", "腿足受支撐且平衡（1分）", "腿足未受支撐或不平衡（2分）"], index=0)
     neck_twisted_manual = st.checkbox("頸部有扭轉（+1）", value=False)
-    neck_extended_manual = st.checkbox("頸部後仰／伸展（頸部基礎分 4）", value=False)
+    neck_extended_manual = st.checkbox("頸部後仰／伸展", value=False)
     trunk_twisted_manual = st.checkbox("軀幹有扭轉（+1）", value=False)
-    trunk_extended_manual = st.checkbox("軀幹向後伸展（軀幹基礎分 2）", value=False)
+    trunk_extended_manual = st.checkbox("軀幹向後伸展", value=False)
 with mod_col_b:
     right_wrist_twist_choice = st.selectbox("右手腕扭轉（必選）", ["請先目視確認…", "中間範圍（1分）", "接近旋轉極限（2分）"], index=0)
-    right_wrist_deviated = st.checkbox("右手腕偏離中線／尺橈偏移（+1）", value=False)
-    right_shoulder_raised = st.checkbox("右肩抬高／聳肩（上臂 +1）", value=False)
-    right_arm_supported = st.checkbox("右上臂有支撐或身體倚靠（上臂 -1）", value=False)
-    right_arm_extended = st.checkbox("右上臂向身體後方伸展超過 20°", value=False)
+    right_wrist_deviated = st.checkbox("右手腕尺偏／橈偏（+1）", value=False)
+    right_shoulder_raised = st.checkbox("右肩抬高／聳肩（+1）", value=False)
+    right_arm_supported = st.checkbox("右上臂有支撐（-1）", value=False)
+    right_arm_extended = st.checkbox("右上臂後伸超過 20°（人工輸入／辨識不明時備用）", value=False)
 with mod_col_c:
     left_wrist_twist_choice = st.selectbox("左手腕扭轉（必選）", ["請先目視確認…", "中間範圍（1分）", "接近旋轉極限（2分）"], index=0)
-    left_wrist_deviated = st.checkbox("左手腕偏離中線／尺橈偏移（+1）", value=False)
-    left_shoulder_raised = st.checkbox("左肩抬高／聳肩（上臂 +1）", value=False)
-    left_arm_supported = st.checkbox("左上臂有支撐或身體倚靠（上臂 -1）", value=False)
-    left_arm_extended = st.checkbox("左上臂向身體後方伸展超過 20°", value=False)
+    left_wrist_deviated = st.checkbox("左手腕尺偏／橈偏（+1）", value=False)
+    left_shoulder_raised = st.checkbox("左肩抬高／聳肩（+1）", value=False)
+    left_arm_supported = st.checkbox("左上臂有支撐（-1）", value=False)
+    left_arm_extended = st.checkbox("左上臂後伸超過 20°（人工輸入／辨識不明時備用）", value=False)
 
 
 def build_manual_mods(side_name):
     is_right = side_name == "右手側"
     twist_choice = right_wrist_twist_choice if is_right else left_wrist_twist_choice
     return {
+        "auto_selection": dict(auto_selection),
+        "manual_front": {flag: manual_front.get((side_name, flag), False) for flag in front_labels},
         "leg_score": 1 if leg_support_choice == "腿足受支撐且平衡（1分）" else 2,
         "wrist_twist_score": 1 if twist_choice == "中間範圍（1分）" else 2,
         "wrist_deviated": right_wrist_deviated if is_right else left_wrist_deviated,
@@ -843,6 +923,13 @@ def build_manual_mods(side_name):
         "trunk_twisted": trunk_twisted_manual,
         "trunk_extended": trunk_extended_manual,
     }
+
+# 當全部正面鏡頭自動補正都已關閉，可用手動設定繼續，避免因正面關鍵點不足而中斷。
+def manual_front_fallback():
+    front_keys = ("is_abducted", "is_across_midline", "is_out_to_side", "is_side_bending", "is_neck_side_bending")
+    if any(auto_selection.get(key, True) for key in front_keys):
+        return None
+    return {key: False for key in front_keys}
 
 # 執行分析按鈕
 if st.button("🚀 啟動全關節生物力學分析", type="primary", use_container_width=True):
@@ -959,9 +1046,9 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
                         front_ok_r, front_mods_r = analyze_front_camera(f_frame, pose, "右手側")
                         front_ok_l, front_mods_l = analyze_front_camera(f_frame, pose, "左手側")
                         if not front_ok_r:
-                            front_mods_r = None
+                            front_mods_r = manual_front_fallback()
                         if not front_ok_l:
-                            front_mods_l = None
+                            front_mods_l = manual_front_fallback()
 
                         # 2. 右側鏡頭只評估右側關鍵點；低品質正面補正會使該樣本略過，不默認為「否」。
                         succ_r, data_r, img_r, conf_r = analyze_side_camera(
@@ -1164,7 +1251,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
                     if s_f and s_s:
                         front_ok, front_mods = analyze_front_camera(f_frame, pose, target_side)
                         if not front_ok:
-                            front_mods = None
+                            front_mods = manual_front_fallback()
                         succ_s, data, side_annotated, conf = analyze_side_camera(
                             s_frame, pose, target_side, front_mods, m_val, f_val,
                             manual_mods=build_manual_mods(target_side)
