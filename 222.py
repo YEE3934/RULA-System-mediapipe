@@ -907,7 +907,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
 
             with mp.solutions.pose.Pose(
                 static_image_mode=True,
-                model_complexity=2,
+                model_complexity=1,
                 min_detection_confidence=0.50
             ) as pose:
                 total_samples = len(sample_times)
