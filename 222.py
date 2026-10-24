@@ -1238,12 +1238,20 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
 
 # ==================== 【V4：時間異常檢測／逐影格人工複核】 ====================
 # 警示閾值是工程篩檢參數，不是已驗證的人體角度準確性標準。
-V4_JUMP_THRESHOLD_DEG = 45.0
-V4_WRIST_2D3D_GAP_DEG = 25.0
+# V4.1: 保守異常篩檢。正常的姿勢轉換不再因相鄰角度差大而被列入異常。
+# 所有數值均為工程篩檢門檻，尚未經人工標準影像驗證。
+V41_WRIST_EXTREME_DEG = 60.0
+V41_ELBOW_EXTREME_DEG = 170.0
+V41_ISOLATED_SPIKE_DEG = 85.0
+V41_NEIGHBOR_SIMILAR_DEG = 25.0
 
 
 def v4_mark_anomalies(df, side):
-    """每個評估側獨立計算警示；前後差異大只代表需複核，並非判定錯誤。"""
+    """極保守的嚴重異常清單：極端腕/肘角度 + 極明顯孤立尖峰。
+
+    單次真實動作變化、腕 2D/3D 差異、或原始資料的寬鬆複核旗標
+    仍保留在 CSV 供研究，但不單獨觸發使用者警示。
+    """
     if df is None or df.empty:
         return pd.DataFrame()
     data = df.copy().sort_values("時間(秒)").reset_index(drop=True)
@@ -1255,25 +1263,30 @@ def v4_mark_anomalies(df, side):
     for col, label in checks:
         if col not in data.columns:
             continue
-        vals = pd.to_numeric(data[col], errors="coerce")
+        vals = pd.to_numeric(data[col], errors="coerce").to_numpy(dtype=float)
         for i, value in enumerate(vals):
-            if pd.isna(value):
-                reasons[i].append(f"{label}角度缺失")
-            elif (label == "手腕" and value > 60) or (label == "前臂" and value > 150) or (label == "軀幹" and value > 100):
-                reasons[i].append(f"{label}極端角度 {value:.1f}°")
-            if i > 0 and pd.notna(value) and pd.notna(vals.iloc[i - 1]):
-                jump = abs(float(value) - float(vals.iloc[i - 1]))
-                if jump >= V4_JUMP_THRESHOLD_DEG:
-                    reasons[i].append(f"{label}相鄰樣本差 {jump:.1f}°")
-                    reasons[i - 1].append(f"{label}與下一樣本差 {jump:.1f}°")
-    flag_col = f"{prefix}手腕角度需複核"
-    for i, row in data.iterrows():
-        if flag_col in data.columns and str(row[flag_col]).lower() in ("true", "1", "是"):
-            reasons[i].append("手腕2D/3D分歧或角度過大")
+            if not np.isfinite(value):
+                reasons[i].append(f"{label}角度無效，無法計分")
+                continue
+            if label == "手腕" and value > V41_WRIST_EXTREME_DEG:
+                reasons[i].append(f"手腕極端角度 {value:.1f}°（建議確認遮擋）")
+            if label == "前臂" and value >= V41_ELBOW_EXTREME_DEG:
+                reasons[i].append(f"前臂屈曲角度極端 {value:.1f}°（建議檢查關節定位）")
+            # 僅標記前後影格彼此接近、中央影格卻突然大幅偏離的孤立尖峰。
+            # 這能排除大部分真實的連續彎腰、起立、舉手等運動。
+            if 0 < i < len(vals) - 1:
+                prev, nxt = vals[i - 1], vals[i + 1]
+                if (np.isfinite(prev) and np.isfinite(nxt)
+                        and abs(prev - nxt) <= V41_NEIGHBOR_SIMILAR_DEG
+                        and abs(value - prev) >= V41_ISOLATED_SPIKE_DEG
+                        and abs(value - nxt) >= V41_ISOLATED_SPIKE_DEG):
+                    reasons[i].append(f"{label}孤立尖峰 {value:.1f}°（前後值 {prev:.1f}°／{nxt:.1f}°）")
     data["自動複核警示"] = ["；".join(dict.fromkeys(rs)) for rs in reasons]
     data["需要複核"] = data["自動複核警示"].str.len() > 0
+    data["警示等級"] = np.where(data["需要複核"], "嚴重待確認", "無嚴重警示")
     data["評估側"] = side
     return data
+
 
 
 def v4_recalculate_from_scores(row, updates, side):
@@ -1304,7 +1317,7 @@ def v4_make_zip(original_zip, reviews, anomaly_frames):
             dst.writestr(info, original.read(info.filename))
         dst.writestr("Diagnostics/V4_Anomaly_Review.csv", anomaly_frames.to_csv(index=False).encode("utf-8-sig"))
         dst.writestr("Diagnostics/V4_Manual_Overrides.csv", pd.DataFrame(list(reviews.values())).to_csv(index=False).encode("utf-8-sig"))
-        dst.writestr("Diagnostics/V4_README.txt", "自動警示不等於辨識錯誤。人工修正修改的是逐影格 RULA 分數，原始角度、原始影像與原始 CSV 均未覆蓋。請另行使用標準工作表核對 RULA 查表內容。".encode("utf-8"))
+        dst.writestr("Diagnostics/V4_README.txt", "V4.1 使用保守篩檢：相鄰正常運動不算異常；只警示極端手腕/前臂角度或孤立尖峰。警示不等於辨識錯誤；沒有警示也不等於正確。人工修正修改的是逐影格 RULA 分數，原始角度、原始影像與原始 CSV 均未覆蓋。請另行使用標準工作表核對 RULA 查表內容。".encode("utf-8"))
     return out.getvalue()
 
 
@@ -1330,7 +1343,7 @@ def v4_show_review_center():
         c1.metric("有效評估筆數", len(all_checked))
         c2.metric("待複核筆數", len(flagged))
         c3.metric("警示占比", f"{len(flagged) / len(all_checked):.1%}")
-        st.caption("警示由相鄰角度跳動、極端值及原始手腕 2D/3D 差異組成；不能直接當成模型準確度或誤判率。")
+        st.caption("V4.1 採保守篩檢：只提示極端腕/肘角度、或前後相近但中央極端偏離的孤立尖峰。正常連續動作不因角度變化快而警示；原始 2D/3D 差異仍保留在 CSV。")
         if flagged.empty:
             st.success("沒有觸發目前的工程警示閾值；仍建議抽樣人工核對。")
         else:
@@ -1346,11 +1359,25 @@ def v4_show_review_center():
             st.write(f"{found['時間(秒)']} 秒 ｜ 原始 RULA {found['最終最高分']} ｜ {found['自動複核警示'] or '無警示'}")
             images = (st.session_state.display_right_b64 if side == "右手側" else st.session_state.display_left_b64) if both else st.session_state.display_images_b64
             import re
+            photo_found = False
             for caption, payload in images:
                 match = re.search(r"#(\d+)", caption)
                 if match and int(match.group(1)) == int(chosen):
-                    st.image(base64.b64decode(payload), caption=caption, use_container_width=True)
+                    # /media 圖片路徑在部分 Streamlit Cloud/瀏覽器環境無法存取；
+                    # 直接在 iframe 用 data URI 內嵌，不向 /media 發請求。
+                    import html as html_lib
+                    components.html(
+                        f'<div style="text-align:center;color:#ddd">'
+                        f'<img src="data:image/jpeg;base64,{payload}" '
+                        f'style="display:block;max-width:100%;max-height:700px;margin:auto;border-radius:8px" />'
+                        f'<p>{html_lib.escape(caption)}</p></div>',
+                        height=760,
+                        scrolling=True,
+                    )
+                    photo_found = True
                     break
+            if not photo_found:
+                st.warning("此樣本沒有可用的預覽照片；請至原始 ZIP 的 Photos 資料夾檢查。")
         else:
             st.info("此評估側沒有符合條件的影格，可取消勾選警示篩選。")
 
@@ -1408,7 +1435,8 @@ def v4_show_review_center():
 
     st.subheader("📦 下載含異常清單與人工覆核紀錄的完整 ZIP")
     enhanced = v4_make_zip(st.session_state.zip_bytes, st.session_state.v4_overrides, all_checked)
-    st.download_button("下載 V4 完整 ZIP（原始資料＋審核結果）", enhanced, file_name="RULA_V4_Review_Report.zip", mime="application/zip", key="v4_download")
+    st.caption("使用瀏覽器本地 Blob 下載，避開部分 Streamlit Cloud /media 下載路徑失效的問題。")
+    render_blob_download_button(enhanced, "RULA_V4_Review_Report.zip", "📥 下載 V4 完整 ZIP（原始資料＋審核結果）")
 
 
 # ==================== 【網頁即時成果展示與打包下載區】 ====================
