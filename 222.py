@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 POSE_MODEL_COMPLEXITY = 1
 APP_BUILD_TAG = "RULA_AUDITABLE_2026-10-24_v3"
 
-# ==================== 【正統 RULA 查表矩陣】 ====================
+# ==================== 【 RULA 查表矩陣】 ====================
 TABLE_A = {
     1: { 1: {1: {1:1, 2:2}, 2: {1:2, 2:2}, 3: {1:2, 2:3}, 4: {1:3, 2:3}},
          2: {1: {1:2, 2:2}, 2: {1:2, 2:3}, 3: {1:3, 2:3}, 4: {1:3, 2:4}},
@@ -58,7 +58,7 @@ TABLE_C = [
     [4, 4, 4, 5, 6, 7, 7], [4, 4, 5, 6, 6, 7, 7], [5, 5, 6, 6, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7]
 ]
 
-# ==================== 【自動中文字型載入器】 ====================
+# ==================== 【中文字型】 ====================
 @st.cache_resource
 def ensure_chinese_font():
     candidates = [
@@ -794,11 +794,11 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
 
 
 # ==================== 【Streamlit 網頁應用介面】 ====================
-st.set_page_config(page_title="RULA 三視角人因工程 AI 評估系統", layout="wide")
+st.set_page_config(page_title="RULA 人因工程 AI 評估系統", layout="wide")
 st.title("RULA 姿勢危害評估系統")
 st.caption(f"部署版本：{APP_BUILD_TAG}｜執行檔：{os.path.basename(__file__)}｜MediaPipe Pose complexity={POSE_MODEL_COMPLEXITY}")
 st.markdown(
-    "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 部分影像補正可選擇自動判讀；手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目仍需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
+    "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 部分影像補正可選擇自動判讀；手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目仍需人工確認，輸出仍須由受訓評估者複核。"
 )
 
 if "v4_overrides" not in st.session_state:
@@ -847,7 +847,7 @@ with col_p1:
 with col_p2:
     combo_muscle = st.selectbox("肌肉使用分數 (Muscle Score):", ["0: 非靜態且動作少於每分鐘 4 次", "1: 姿勢維持超過 1 分鐘或動作每分鐘至少 4 次"])
 with col_p3:
-    combo_force = st.selectbox("負載與施力 (Force/Load):", ["0: < 2kg (間歇施力)", "1: 2-10kg (間歇施力)", "2: 2-10kg 靜態／重複施力", "3: >10kg 負載、重複施力或衝擊力"])
+    combo_force = st.selectbox("負載與施力 (Force/Load):", ["0: < 2kg (間歇施力)", "1: 2-10kg (間歇施力)", "2: 2-10kg 靜態／重複施力", "2: 負載 > 10kg (間歇性)",  "3: >10kg 負載、重複施力或衝擊力"])
 
 
 st.header("第三步：自動辨識設定")
@@ -884,7 +884,7 @@ with st.container():
                     manual_front[("左手側", flag)] = st.checkbox("左側｜" + caption, value=False, key="v5_manual_left_"+flag)
 
 st.subheader("仍需人工輸入的項目")
-st.caption("以下項目不能單靠 33 點 Pose 可靠判定，包括實際受力、支撐及前臂旋轉；本版保留人工選項。未啟用上臂後伸自動判斷時，亦由使用者自行勾選。")
+st.caption("以下項目不能判定，包括實際受力、支撐及前臂旋轉；未啟用上臂後伸自動判斷時，由使用者自行勾選。")
 mod_col_a, mod_col_b, mod_col_c = st.columns(3)
 with mod_col_a:
     leg_support_choice = st.selectbox("腿與足部支撐／平衡（必選）", ["請先目視確認…", "腿足受支撐且平衡（1分）", "腿足未受支撐或不平衡（2分）"], index=0)
@@ -932,7 +932,7 @@ def manual_front_fallback():
     return {key: False for key in front_keys}
 
 # 執行分析按鈕
-if st.button("🚀 啟動全關節生物力學分析", type="primary", use_container_width=True):
+if st.button("開始分析", type="primary", use_container_width=True):
     is_dual_mode = eval_mode.startswith("左右側同步計算")
 
     # 嚴格檢查影片上傳完整性
@@ -951,7 +951,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
 
     required_manual_sides = ["右手側", "左手側"] if is_dual_mode else [eval_mode]
     if leg_support_choice == "請先目視確認…":
-        st.error("請先人工確認腿與足部是否受支撐且平衡，再啟動分析。")
+        st.error("請先人工確認腿與足部是否受支撐且平衡，再開始分析。")
         st.stop()
     for required_side in required_manual_sides:
         twist_choice = right_wrist_twist_choice if required_side == "右手側" else left_wrist_twist_choice
@@ -959,7 +959,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
             st.error(f"請先人工確認{required_side}手腕扭轉狀態，再啟動分析。")
             st.stop()
 
-    with st.spinner(f"系統正在進行 33 點全解剖特徵擷取與 RULA 解算（模式：{eval_mode}）..."):
+    with st.spinner(f"系統正在進行 33 點特徵擷取與 RULA 運算（模式：{eval_mode}）..."):
         st.session_state.v4_overrides = {}
         st.session_state.display_images_b64 = []
         st.session_state.display_right_b64 = []
@@ -1293,7 +1293,7 @@ if st.button("🚀 啟動全關節生物力學分析", type="primary", use_conta
                         skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": target_side, "可能原因": "影片影格讀取失敗"})
 
                     progress_bar.progress((i + 1) / total_samples)
-                    status_text.text(f"全關節姿態解算進度: {i+1} / {total_samples} 筆完成")
+                    status_text.text(f"關節姿態解算進度: {i+1} / {total_samples} 筆完成")
 
             cap_front.release(); cap_side.release()
             try:
@@ -1404,12 +1404,12 @@ def v4_make_zip(original_zip, reviews, anomaly_frames):
             dst.writestr(info, original.read(info.filename))
         dst.writestr("Diagnostics/V4_Anomaly_Review.csv", anomaly_frames.to_csv(index=False).encode("utf-8-sig"))
         dst.writestr("Diagnostics/V4_Manual_Overrides.csv", pd.DataFrame(list(reviews.values())).to_csv(index=False).encode("utf-8-sig"))
-        dst.writestr("Diagnostics/V4_README.txt", "V4.1 使用保守篩檢：相鄰正常運動不算異常；只警示極端手腕/前臂角度或孤立尖峰。警示不等於辨識錯誤；沒有警示也不等於正確。人工修正修改的是逐影格 RULA 分數，原始角度、原始影像與原始 CSV 均未覆蓋。請另行使用標準工作表核對 RULA 查表內容。".encode("utf-8"))
+        dst.writestr("Diagnostics/V4_README.txt", "使用保守篩檢：相鄰正常運動不算異常；只警示極端手腕/前臂角度或孤立尖峰。警示不等於辨識錯誤；沒有警示也不等於正確。人工修正修改的是逐影格 RULA 分數，原始角度、原始影像與原始 CSV 均未覆蓋。請另行使用標準工作表核對 RULA 查表內容。".encode("utf-8"))
     return out.getvalue()
 
 
 def v4_show_review_center():
-    st.header("🧪 V4：異常影格審核中心／人工修正／風險時間軸")
+    st.header("異常影格審核／人工修正／風險時間軸")
     mode = st.session_state.analyzed_mode
     both = mode == "左右側同步計算"
     available = {}
@@ -1423,14 +1423,14 @@ def v4_show_review_center():
         return
 
     all_checked = pd.concat([v4_mark_anomalies(df, side) for side, df in available.items()], ignore_index=True)
-    t1, t2, t3 = st.tabs(["🚩 異常影格審核中心", "✍️ 逐影格人工修正與重算", "📈 RULA 動作風險時間軸"])
+    t1, t2, t3 = st.tabs(["🚩 異常影格審核", "✍️ 逐影格人工修正與重算", "📈 RULA 動作風險時間軸"])
     with t1:
         flagged = all_checked[all_checked["需要複核"]]
         c1, c2, c3 = st.columns(3)
         c1.metric("有效評估筆數", len(all_checked))
         c2.metric("待複核筆數", len(flagged))
         c3.metric("警示占比", f"{len(flagged) / len(all_checked):.1%}")
-        st.caption("V4.1 採保守篩檢：只提示極端腕/肘角度、或前後相近但中央極端偏離的孤立尖峰。正常連續動作不因角度變化快而警示；原始 2D/3D 差異仍保留在 CSV。")
+        st.caption("採保守篩檢：只提示極端腕/肘角度、或前後相近但中央極端偏離的孤立尖峰。正常連續動作不因角度變化快而警示；原始 2D/3D 差異仍保留在 CSV。")
         if flagged.empty:
             st.success("沒有觸發目前的工程警示閾值；仍建議抽樣人工核對。")
         else:
