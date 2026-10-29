@@ -34,6 +34,6 @@ assert all(unknown[key] is None for key in ('upper_arm_extended','trunk_extended
 source=P.read_text()
 assert '上臂向後伸展（側面有向角度）' in source and '實驗性）' not in source.split('AUTO_FLAGS={',1)[1].split('front_labels=',1)[0]
 assert "auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,True)" in source
-assert "'採用分析前設定（候選）'" in source
+assert "'採用分析前設定（尚未額外人工修改）'" in source
 assert '未確認姿勢／負荷補正。請至' not in source
 print('PASS directionality: left/right camera mirrored, arm/trunk/neck extension, near-threshold, occlusion; defaults enabled')

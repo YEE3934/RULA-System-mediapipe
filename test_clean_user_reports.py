@@ -30,7 +30,7 @@ assert clean.iloc[0]['頸部分數']==1
 assert clean.iloc[0]['時間(秒)']==0.0
 assert not any('v8' in c.lower() or '3D' in c or '候選' in c for c in clean.columns)
 assert len([c for c in clean if '手腕角度' in c])==1
-assert len([c for c in clean if '頸部角度' in c])==0
+assert clean.iloc[0]['頸部角度(°)']==8.1
 assert '上臂分數' not in clean.columns
 with_scores=ns['user_report_side'](side,'右手側',with_scores=True)
 assert with_scores.iloc[0]['手腕分數']==1
@@ -42,7 +42,9 @@ both=pd.DataFrame([{
 }])
 c=ns['user_report_dual'](both)
 assert len([k for k in c if '手腕角度' in k])==2
-assert len([k for k in c if '頸部角度' in k])==0
+assert len([k for k in c if '頸部角度' in k])==2
+assert c.iloc[0]['右側頸部角度(°)']==8.1
+assert c.iloc[0]['左側頸部角度(°)']==6.2
 assert c.iloc[0]['共同頸部分數']==1
 assert not any('_v' in x or '候選' in x for x in c.columns)
 # ZIP includes readable top-level and research-only technical area; no development version in main report.
@@ -69,6 +71,6 @@ with zipfile.ZipFile(io.BytesIO(final)) as z:
     assert '時間同步/逐筆取樣時間.csv' in names
     assert not any('V11_' in n or 'v8' in n or 'V114_' in n for n in names)
     data=pd.read_csv(io.BytesIO(z.read('原始分析/右側角度與評分.csv')))
-    assert '手腕角度(°)' in data and '頸部分數' in data
+    assert '手腕角度(°)' in data and '頸部分數' in data and '頸部角度(°)' in data
     assert all('v8' not in c and '_v' not in c for c in data.columns)
-print('PASS: compact single/dual/score CSV, zip layout, photo preservation, readable filenames')
+print('PASS: visible neck angle single/dual/score CSV, zip layout, photo preservation, readable filenames')

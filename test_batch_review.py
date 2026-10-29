@@ -40,7 +40,7 @@ raw={R:pd.DataFrame([make(R,i,neck_angle=5 if i<3 else 25) for i in range(1,6)])
      L:pd.DataFrame([make(L,i,neck_angle=5 if i<3 else 25) for i in range(1,6)])}
 copy={side:df.copy(deep=True) for side,df in raw.items()}
 empty,untrusted,cases=ns['batch_effective_frames'](raw,{},set())
-assert len(untrusted)==10 and all(v=='採用分析前設定（候選）' for v in untrusted.values())
+assert len(untrusted)==10 and all(v=='採用分析前設定（尚未額外人工修改）' for v in untrusted.values())
 reviewed,combined=ns['v113_build_reviewed_data'](empty,[],{}, {},batch_status=untrusted)
 assert reviewed['複核後Grand Score'].notna().all(),reviewed
 assert combined['完整雙側最高分'].notna().all()

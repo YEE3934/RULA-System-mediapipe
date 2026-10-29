@@ -53,7 +53,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
 # which is typically read-only on hosted deployments.
 POSE_MODEL_COMPLEXITY = 1
-APP_BUILD_TAG = "RULA_DIRECTIONAL_DEFAULTS_2026-10-30"
+APP_BUILD_TAG = "RULA_VIDEO_TIMELINE_AUTO_2026-10-30"
 
 # ==================== 【沿用 v6 RULA 查表矩陣：仍需標準工作表逐格核對】 ====================
 TABLE_A = {
@@ -272,7 +272,7 @@ def enhance_image_for_pose(bgr_img):
 # 本區所有門檻是「需複核篩檢」，不是經實驗確認的精確度或人體解剖閾值。
 # 只有跨條件的強訊號／孤立錯位才標記「需人工複核」，不因正常動作幅度大而直接剔除。
 V11_QC_GUIDE = ("V11.2 骨架品質是工程性遮擋／定位錯誤篩檢，非量測準確率或遮擋的絕對判定。\n"
-                "候選 RULA 分數若標為需人工複核，不能直接作為正式風險結論。\n"
+                "RULA 系統分數若標為需人工複核，不能直接作為正式風險結論。\n"
                 "P2 跨鏡頭只提供可見度候選，不搬用未標定鏡頭的 2D 角度。\n"
                 "正常高速移動不可只憑角度差判成異常；手臂靠近頭部也不直接代表關鍵點一定錯誤。\n")
 V11_PROBE_SECONDS = 0.12
@@ -367,7 +367,7 @@ def v11_1_neck_crosscheck(qc, data, peer):
         qc['頸部跨鏡頭診斷']='未發現顯著跨鏡頭分級差異'
 
 def v11_quality_from_snapshot(snap, side, data=None):
-    """幾何與可見度是不同證據；只有多證據疑慮才擱置候選分數。"""
+    """幾何與可見度是不同證據；只有多證據疑慮才擱置系統評分。"""
     data = data or {}
     right = side == '右手側'
     ids = {'sh':12 if right else 11, 'el':14 if right else 13,
@@ -442,7 +442,7 @@ def v11_quality_from_snapshot(snap, side, data=None):
         soft.append(overlap['頭頸遮擋證據'])
         affected.extend(['el','wr','neck'])
     # 僅高度重疊、極端屈肘與頭頸前傾共同出現時先列局部複核；
-    # 這是遮擋風險而非已確定錯點，仍保留候選分數與雙照片。
+    # 這是遮擋風險而非已確定錯點，仍保留系統評分與雙照片。
     if overlap['頭頸遮擋強訊號']:
         hard.append('頭頸與手腕投影高度重疊且前臂屈曲極端，定位證據不足')
     minimum=min(x for x in vis.values() if np.isfinite(x)) if any(np.isfinite(x) for x in vis.values()) else np.nan
@@ -571,7 +571,7 @@ def v11_cross_view_hint(other_frame, pose_model, side, current_visibility):
 
 def v11_update_qc(data, snap, side, side_cap=None, side_frame_idx=None, side_fps=None,
                   pose_model=None, other_frame=None, policy='保守（推薦：只列嚴重疑慮）', neck_peer=None):
-    """P0-P2 關節品質標記；保存候選分數，不以可疑值作為可採信結論。"""
+    """P0-P2 關節品質標記；保存系統評分，不以可疑值作為可採信結論。"""
     qc=v11_quality_from_snapshot(snap,side,data)
     qc.update({'時間重查':'未觸發','時間重查判定':'未觸發','時間錯位關節':'',
                '跨視角診斷':'未觸發','其他鏡頭腕肘最低可見度':np.nan})
@@ -589,7 +589,7 @@ def v11_update_qc(data, snap, side, side_cap=None, side_frame_idx=None, side_fps
     qc['品質可直接採信']=(qc['品質狀態']!='需人工複核')
     qc['品質是否列入複核中心']=(qc['品質狀態']=='需人工複核' or
                         (policy.startswith('審慎') and qc['品質狀態']=='留意'))
-    qc['品質計分說明']=('已輸出候選分數，需人工確認後才可採信' if qc['品質狀態']=='需人工複核'
+    qc['品質計分說明']=('已輸出系統評分，需人工確認後才可採信' if qc['品質狀態']=='需人工複核'
                     else '工程品質檢查通過；仍非角度準確率證明')
     data.update(qc)
     return qc
@@ -604,7 +604,7 @@ def v11_front_fallback_note(qc, data, front_ok, auto_settings):
     qc['品質可直接採信']=False
     qc['品質是否列入複核中心']=True
     qc['品質原因']=str(qc.get('品質原因',''))+'；正面關鍵點不足，自動 RULA 補正項未能確認'
-    qc['品質計分說明']='正面補正條件未確認，原分數僅候選'
+    qc['品質計分說明']='正面補正條件未確認，這是系統估算結果'
     data.update(qc)
     return qc
 
@@ -648,9 +648,9 @@ def v11_add_qc_review(items, photos, sample_id, sec, side, qc, frames, pose_mode
     if len(items)<=before: return
     item=items[-1]
     only_notice = qc.get('品質狀態')=='留意'
-    item['紀錄類型']=('骨架品質提醒（仍可採信）' if only_notice else '骨架品質待複核（有候選 RULA 分數）')
+    item['紀錄類型']=('骨架品質提醒（仍可採信）' if only_notice else '骨架品質待複核（有RULA 系統分數）')
     item['評分狀態']=('品質提醒：原分數維持有效，無須強制人工複核' if only_notice
-                    else '僅候選分數，未經複核不應作為正式結論')
+                    else '僅系統評分，未經複核不應作為正式結論')
     item['局部可能受影響']=qc.get('局部可能受影響','')
     item['頭頸遮擋證據']=qc.get('頭頸遮擋證據','')
     item['頸部跨鏡頭診斷']=qc.get('頸部跨鏡頭診斷','')
@@ -2115,8 +2115,58 @@ def v8_encode_html_image(payload, caption=''):
             f'style="max-width:100%;max-height:540px;border-radius:8px"/><p>{html.escape(caption)}</p></div>')
 
 
+
+# =============== 影片原始秒數：肌肉使用／負重區間設定 ===============
+# 用側面參考鏡頭的原始影片秒數，和同步事件(正負秒)無關。
+# 此處只設定使用者掌握的作業條件，不從單張骨架臆測重量或重複頻率。
+def rula_timeline_rules(values, duration=None):
+    if not bool(values.get('timeline_enabled',False)):
+        return []
+    try:
+        count=int(values.get('timeline_count',1))
+        if not 1<=count<=8:
+            raise ValueError('時段數量必須介於 1～8 組')
+        rules=[]
+        for i in range(count):
+            start=float(values.get(f'timeline_{i}_start',0.0))
+            end=float(values.get(f'timeline_{i}_end',5.0 if i==0 else 0.0))
+            m=int(values.get(f'timeline_{i}_muscle',0))
+            f=int(values.get(f'timeline_{i}_force',0))
+            title=str(values.get(f'timeline_{i}_title',f'時段{i+1}') or f'時段{i+1}').strip()[:48]
+            if not all(np.isfinite(x) for x in (start,end)):
+                raise ValueError(f'第 {i+1} 組時間不是有效數字')
+            if start<0 or end<=start:
+                raise ValueError(f'第 {i+1} 組必須是「結束秒數大於開始秒數」')
+            if duration is not None and end>float(duration)+0.08:
+                raise ValueError(f'第 {i+1} 組結束時間 {end:g} 秒超過參考側面影片長度 {float(duration):.2f} 秒')
+            if m not in (0,1) or f not in (0,1,2,3):
+                raise ValueError(f'第 {i+1} 組 RULA 分數範圍不正確')
+            rules.append({'name':title,'start':start,'end':end,'muscle':m,'force':f})
+        rules.sort(key=lambda x:x['start'])
+        for a,b in zip(rules,rules[1:]):
+            if b['start']<a['end']-1e-8:
+                raise ValueError(f'「{a["name"]}」和「{b["name"]}」時間重疊，請修改成不重複的範圍')
+        return rules
+    except (TypeError,OverflowError) as exc:
+        raise ValueError('時段資料不正確，請重新輸入秒數和分數') from exc
+
+
+def rula_timeline_at(video_second, rules, default_muscle, default_force):
+    """[start, end)；最後一組在實際尾端仍使用 [start,end]，無重疊歧義。"""
+    second=float(video_second)
+    for i,rule in enumerate(rules):
+        if rule['start']-1e-6<=second<rule['end']-1e-6 or (i==len(rules)-1 and abs(second-rule['end'])<=1e-3):
+            return int(rule['muscle']),int(rule['force']),f"影片時段：{rule['name']}（{rule['start']:g}～{rule['end']:g}秒）"
+    return int(default_muscle),int(default_force),'分析前的預設作業條件'
+
+
+def rula_timeline_video_fields(video_second, rules, default_muscle, default_force):
+    m,f,source=rula_timeline_at(video_second,rules,default_muscle,default_force)
+    return {'參考側影片時間(秒)':round(float(video_second),3),'作業條件設定來源':source,
+            '肌肉使用加分':m,'負重施力加分':f}
+
 # ==================== 最終驗證版：照片級補正與批次確認（不重跑 MediaPipe） ====================
-# 原始 DataFrame 只讀；人工勾選僅寫進獨立覆核資料，不覆寫角度或原始候選分數。
+# 原始 DataFrame 只讀；人工勾選僅寫進獨立覆核資料，不覆寫角度或原始系統評分。
 BATCH_BOOL_FIELDS = [
  ('abducted','上臂外展'),('across','前臂跨中線'),('out_side','前臂向外工作'),
  ('trunk_side','軀幹側彎'),('neck_side','頸部側彎'),
@@ -2252,11 +2302,16 @@ def batch_effective_frames(side_frames, profiles, confirmed, neck_decisions=None
             p=batch_get_profile(row,side,profiles.get(key,{}))
             unknown=[BATCH_FIELDS[k] for k,v in p.items() if k in BATCH_FIELDS and v is None]
             st=('無法確認：'+','.join(unknown) if unknown else
-                ('補正已人工確認' if key in confirmed else '採用分析前設定（候選）'))
+                ('補正已人工確認' if key in confirmed else '採用分析前設定（尚未額外人工修改）'))
             status[key]=st
             rec=batch_recalculate_side(row,side,p)
+            # 第二階段的單張／批次修改會覆蓋影片時段值；報表須清楚顯示最終來源。
+            edited=profiles.get(key,{})
+            if any(field in edited for field in ('muscle','force')):
+                rec['作業條件設定來源']=(str(row.get('作業條件設定來源','分析前的預設作業條件'))
+                                           +'；本張已人工修改')
             rec['照片補正確認狀態']=st
-            rec['照片補正來源']='批次／單張人工確認' if key in confirmed else '分析前設定／逐張自動估測（候選）'
+            rec['照片補正來源']='批次／單張人工修改' if key in confirmed else '分析前設定／逐張自動計算'
             records.append(rec)
         frame_map[side]=pd.DataFrame(records)
     if set(frame_map)>={'右手側','左手側'}:
@@ -2297,6 +2352,10 @@ def batch_audit_table(side_frames, profiles, confirmed):
                 '已確認':key in confirmed,
                 '補正是否有未知項':any(v is None for v in p.values()),
                 '人工修改欄位':','.join(BATCH_FIELDS[k] for k in profiles.get(key,{}) if k in BATCH_FIELDS),
+                '原始時段肌肉使用加分':row.get('肌肉使用加分'),
+                '原始時段負重施力加分':row.get('負重施力加分'),
+                '參考側影片時間(秒)':row.get('參考側影片時間(秒)'),
+                '作業條件設定來源':row.get('作業條件設定來源','分析前的預設作業條件'),
                 **{BATCH_FIELDS[k]:('無法判斷' if v is None else v) for k,v in p.items() if k in BATCH_FIELDS}})
     return pd.DataFrame(records)
 
@@ -2320,8 +2379,8 @@ def batch_choose_none(side):
     st.session_state['batch_selected_'+side]=[]
 
 def batch_photo_panel():
-    st.subheader('照片批次補正｜需要修改才使用')
-    st.caption('系統已依分析前設定與每張可用影像產生候選分數，不需要全選確認。只有負重／扭轉／支撐等條件在部分照片不同時，才多選照片修正；原始候選資料保留。')
+    st.subheader('照片批次修改（選用）')
+    st.caption('系統已依影片時段、初始作業條件及影像自動計分。只有少數照片的扭轉、支撐等條件不同時，才選照片批次修改；其餘不必操作。')
     raw=batch_source_frames(st.session_state)
     sides=[s for s in ('右手側','左手側') if s in raw]
     if not sides:
@@ -2333,7 +2392,7 @@ def batch_photo_panel():
     confirmed=st.session_state.setdefault('batch_confirmed',set())
     profiles=st.session_state.setdefault('batch_profiles',{})
     done=sum((side,sid) in confirmed for sid in ids)
-    st.caption(f'{side}：{len(ids)} 張已有分析候選值；另有 {done} 張做過人工補正／確認（非必要操作）。')
+    st.caption(f'{side}：共 {len(ids)} 張可用評分；其中 {done} 張曾進行人工修改。')
     count=st.selectbox('檢視照片',ids,key='batch_preview_id_'+side)
     images=(st.session_state.get('display_right_b64',[]) if side=='右手側' else
             st.session_state.get('display_left_b64',[])) if len(sides)==2 else st.session_state.get('display_images_b64',[])
@@ -2341,7 +2400,7 @@ def batch_photo_panel():
     chosen=next(((label,raw_b64) for label,raw_b64 in images
                  if _re.search(r'#'+str(count)+r'(?!\d)',label)),None)
     if chosen:
-        st.caption('注意：照片上的 RULA 總分是分析前印入圖片的候選分數；批次補正後請看下方報表，不以照片舊字樣為準。')
+        st.caption('注意：照片上的 RULA 總分是首次分析時印入圖片的分數；批次補正後請看下方報表，不以照片舊字樣為準。')
         v10_show_image(chosen[1],chosen[0],encoded=True)
     else:
         st.caption('這筆照片不在畫廊，請查看剔除樣本或報告照片。')
@@ -2350,16 +2409,16 @@ def batch_photo_panel():
         for i,(label,img) in enumerate(images):
             with cols[i%5]:v10_show_image(v10_thumbnail_b64(img,max_width=160),label,encoded=True)
     current_df=raw[side]
-    with st.expander('目前這張照片的候選補正條件（確認前請查看）',expanded=False):
+    with st.expander('目前這張照片採用的評分條件',expanded=False):
         current_row=current_df.loc[current_df['樣本編號']==count].iloc[0]
         cur=batch_get_profile(current_row,side,profiles.get((side,int(count)),{}))
         preview=pd.DataFrame([{'評分條件':BATCH_FIELDS[k],
                  '目前設定':('無法判斷' if v is None else ('有' if v else '沒有') if isinstance(v,bool) else v)}
                  for k,v in cur.items() if k in BATCH_FIELDS])
         st.dataframe(preview,use_container_width=True,hide_index=True)
-        st.caption('此為分析前預設值或影像推估候選；只有修改時需要人工操作。')
+        st.caption('目前顯示影片時段設定、初始作業條件及自動辨識結果；沒有不同就不必修改。')
     selected_ids=st.multiselect('批次選取照片（可多選）',ids,default=[],key='batch_selected_'+side,
-            help='例如全選 30 張確認一般條件，之後再選第 9～14 張修正扭轉或負重。')
+            help='只需要選擇與初始條件不同的照片；其他照片不用操作。')
     c1,c2=st.columns(2)
     with c1:
         st.button('全選這一側的有效照片',use_container_width=True,key='batch_select_all',
@@ -2367,6 +2426,18 @@ def batch_photo_panel():
     with c2:
         st.button('清空選取',use_container_width=True,key='batch_select_none',
                   on_click=batch_choose_none,args=(side,))
+    with st.expander('快速選取連續照片（例如只改搬運階段）', expanded=False):
+        c_from,c_to,c_choose=st.columns([1,1,1])
+        with c_from:
+            from_id=st.selectbox('起始照片',ids,index=0,key='batch_range_start_'+side)
+        with c_to:
+            to_id=st.selectbox('結束照片',ids,index=len(ids)-1,key='batch_range_end_'+side)
+        with c_choose:
+            st.caption('只需點一次')
+            if st.button('選取範圍',key='batch_range_set_'+side,use_container_width=True):
+                low,high=sorted((int(from_id),int(to_id)))
+                st.session_state['batch_selected_'+side]=[i for i in ids if low<=i<=high]
+                st.rerun()
     if selected_ids:
         st.caption(f'已選 {len(selected_ids)} 張：'+','.join(map(str,selected_ids[:25]))+('…' if len(selected_ids)>25 else ''))
     with st.form('batch_edit_form'):
@@ -2422,7 +2493,7 @@ def batch_photo_panel():
         row=effective[side]
         one=row[row['樣本編號']==sid].iloc[0]
         statuses.append({'照片編號':sid,'補正狀態':status[(side,sid)],
-            '目前候選分數':one.get(('右手' if side=='右手側' else '左手')+' Grand Score'),
+            '目前系統評分':one.get(('右手' if side=='右手側' else '左手')+' Grand Score'),
             '原始分析分數':raw[side].loc[raw[side]['樣本編號']==sid,('右手' if side=='右手側' else '左手')+' Grand Score'].iloc[0]})
     with st.expander('查看所有照片補正確認狀態',expanded=False):
         st.dataframe(pd.DataFrame(statuses),hide_index=True,use_container_width=True)
@@ -2476,7 +2547,7 @@ def v113_record_status(sample, side, source_row, decisions, overrides, flagged_k
     if flagged and not is_notice:
         if (legacy or {}).get(key) == '已目視確認關鍵點／分數（僅紀錄）':
             return '已人工確認採用自動評分', int(source_row['右手 Grand Score' if side=='右手側' else '左手 Grand Score']), str(source_row['右手 AL' if side=='右手側' else '左手 AL'])
-        return '待複核（原始分數僅候選）', None, None
+        return '待複核（需人工檢查後採用）', None, None
     return ('一般提醒：預設保留自動評分' if is_notice else '自動品質通過'), int(source_row['右手 Grand Score' if side=='右手側' else '左手 Grand Score']), str(source_row['右手 AL' if side=='右手側' else '左手 AL'])
 
 
@@ -2514,8 +2585,8 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 status,grand,al='待釐清補正（'+batch_state+'）',None,None
             elif batch_state == '補正已人工確認' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
                 status='照片補正已人工確認／品質篩檢通過'
-            elif batch_state == '採用分析前設定（候選）' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
-                status='使用預設設定的候選分數（未逐張人工確認）'
+            elif batch_state == '採用分析前設定（尚未額外人工修改）' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
+                status='使用預設設定的系統評分（未逐張人工確認）'
             if original is not None and neck_case is not None:
                 if neck_case['需要人工確認'] and neck_choice is None and grand is not None:
                     # 不讓使用者在別處「維持自動評分」繞過共同頸部分級的待確認狀態。
@@ -2531,16 +2602,23 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
             rows.append({
                 '樣本編號':sid,'評估側':side,
                 '原始Grand Score':(original.get('原始自動Grand Score',original.get('右手 Grand Score' if side=='右手側' else '左手 Grand Score')) if original is not None else None),
+                '頸部角度(°)':(original.get('頸部角度') if original is not None else None),
+                '頸部角度計算來源':(original.get('頸部_v114_計分來源','') if original is not None else ''),
                 '照片補正狀態':batch_state,
+                '參考側影片時間(秒)':(original.get('參考側影片時間(秒)') if original is not None else None),
+                '作業條件設定來源':(original.get('作業條件設定來源','') if original is not None else ''),
+                '肌肉使用加分':(original.get('肌肉使用加分') if original is not None else None),
+                '負重施力加分':(original.get('負重施力加分') if original is not None else None),
                 '原始AL':(original.get('原始自動AL', original.get('右手 AL' if side=='右手側' else '左手 AL')) if original is not None else None),
                 '複核後Grand Score':grand, '複核後AL':al,
                 '結果狀態':status,'使用者選擇':decisions.get(v113_key(sid,side),'未額外指定'),
-                '是否納入可信統計':grand is not None,  # 技術欄名沿用；畫面須明示含候選結果
+                '是否納入可信統計':grand is not None,  # 技術欄名沿用；畫面須明示含系統評分結果
                 '原始品質狀態':(original.get('品質狀態','') if original is not None else '無有效自動評分'),
                 '採用頸部分數':(int(neck_choice) if neck_choice is not None else (neck_case['選定共用頸部分數'] if neck_case and not neck_case['需要人工確認'] else None)),
                 '頸部確認狀態':('待人工確認' if neck_case and neck_case['需要人工確認'] and neck_choice is None else ('人工已確認' if neck_choice is not None else ('系統自動共用' if neck_case else '單側評估'))),
             })
-    review_df=pd.DataFrame(rows, columns=['樣本編號','評估側','原始Grand Score','原始AL','複核後Grand Score','複核後AL','結果狀態','使用者選擇','是否納入可信統計','原始品質狀態','採用頸部分數','頸部確認狀態','照片補正狀態'])
+    review_df=pd.DataFrame(rows, columns=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','原始Grand Score','原始AL','複核後Grand Score','複核後AL','結果狀態','使用者選擇','是否納入可信統計','原始品質狀態','採用頸部分數','頸部確認狀態','照片補正狀態',
+                  '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分'])
     consolidated=[]
     for sid in sorted(allids):
         side_rows={r['評估側']:r for r in rows if r['樣本編號']==sid}
@@ -2551,6 +2629,8 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
             higher=max(valid,key=lambda x:x[1]['複核後Grand Score']) if valid else None
             # Full comparison only if BOTH sides pass, otherwise no published dual score.
             consolidated.append({'樣本編號':sid,'雙側結果狀態':label,
+                '右側頸部角度(°)':side_rows['右手側'].get('頸部角度(°)'),
+                '左側頸部角度(°)':side_rows['左手側'].get('頸部角度(°)'),
                 '右手結果狀態':side_rows['右手側']['結果狀態'],
                 '左手結果狀態':side_rows['左手側']['結果狀態'],
                 '右手複核後分數':side_rows['右手側']['複核後Grand Score'],
@@ -2559,14 +2639,22 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 '完整雙側AL':(higher[1]['複核後AL'] if both_valid else None),
                 '採用頸部分數':side_rows['右手側'].get('採用頸部分數'),
                 '頸部確認狀態':side_rows['右手側'].get('頸部確認狀態'),
+                '參考側影片時間(秒)':side_rows['右手側'].get('參考側影片時間(秒)'),
+                '作業條件設定來源':side_rows['右手側'].get('作業條件設定來源'),
+                '肌肉使用加分':side_rows['右手側'].get('肌肉使用加分'),
+                '負重施力加分':side_rows['右手側'].get('負重施力加分'),
                 '最高風險側':(('雙側同分' if side_rows['右手側']['複核後Grand Score']==side_rows['左手側']['複核後Grand Score'] else higher[0]) if both_valid else '不可判定'),
                 '部分可用側別':('、'.join(side for side,_ in valid) if not both_valid else '')})
         else:
             side=sides[0]
             r=side_rows[side]
             consolidated.append({'樣本編號':sid,'雙側結果狀態':'單側分析','評估側':side,
+                '頸部角度(°)':r.get('頸部角度(°)'),
                 '結果狀態':r['結果狀態'],'複核後Grand Score':r['複核後Grand Score'],'複核後AL':r['複核後AL'],
-                '採用頸部分數':r.get('採用頸部分數'),'頸部確認狀態':r.get('頸部確認狀態')})
+                '採用頸部分數':r.get('採用頸部分數'),'頸部確認狀態':r.get('頸部確認狀態'),
+                '參考側影片時間(秒)':r.get('參考側影片時間(秒)'),
+                '作業條件設定來源':r.get('作業條件設定來源'),
+                '肌肉使用加分':r.get('肌肉使用加分'),'負重施力加分':r.get('負重施力加分')})
     return review_df,pd.DataFrame(consolidated)
 
 
@@ -2675,6 +2763,17 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
                 dest='技術診斷/'+dest.split('Diagnostics/',1)[1]
             if dest in included: continue
             payload=source.read(name)
+            if name=='Diagnostics/Rejected_Samples_Detail.csv':
+                try:
+                    detail_df=pd.read_csv(io.BytesIO(payload),encoding='utf-8-sig')
+                    for column in detail_df.columns:
+                        if '圖片' in str(column) or '照片' in str(column):
+                            detail_df[column]=detail_df[column].apply(lambda v: (
+                                v.replace('Diagnostics/Rejected_Images/',
+                                          '技術診斷/剔除與待複核照片/') if isinstance(v,str) else v))
+                    payload=detail_df.to_csv(index=False).encode('utf-8-sig')
+                except (OSError,ValueError,UnicodeError,pd.errors.ParserError):
+                    pass
             if name=='Diagnostics/V114_Neck_Same_Side_Comparison.csv':
                 try:
                     internal=pd.read_csv(io.BytesIO(payload),encoding='utf-8-sig')
@@ -2708,6 +2807,18 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
         write_unique('複核後結果/逐側結果.csv',user_report_reviewed(reviewed).to_csv(index=False).encode('utf-8-sig'))
         if batch_audit is not None:
             write_unique('複核後結果/逐張人工補正確認.csv',batch_audit.to_csv(index=False).encode('utf-8-sig'))
+        time_rows=[]
+        for side,frame in side_frames.items():
+            if not isinstance(frame,pd.DataFrame) or frame.empty:continue
+            for _,r in frame.iterrows():
+                time_rows.append({'樣本編號':int(r['樣本編號']),'評估側':side,
+                    '參考側影片時間(秒)':r.get('參考側影片時間(秒)'),
+                    '作業條件設定來源':r.get('作業條件設定來源','分析前的預設作業條件'),
+                    '最終肌肉使用加分':r.get('肌肉使用加分'),
+                    '最終負重施力加分':r.get('負重施力加分'),
+                    '人工批次修改':('是' if (batch_status or {}).get((side,int(r['樣本編號'])))=='補正已人工確認' else '否')})
+        write_unique('評估結果/逐張時段與作業條件.csv',pd.DataFrame(time_rows).to_csv(index=False).encode('utf-8-sig'))
+
         # A verified component sheet makes post-batch scores auditable. Pending rows stay explicitly pending.
         detailed=[]
         for side,df in side_frames.items():
@@ -2715,9 +2826,13 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
             pre='右手' if side=='右手側' else '左手'
             for _,r in df.iterrows():
                 sid=int(r['樣本編號']);state=(batch_status or {}).get((side,sid),'補正已確認')
-                detail={'樣本編號':sid,'評估側':side,'補正確認狀態':state,
-                    '原始候選總分':r.get('原始自動Grand Score',r.get(pre+' Grand Score')),
-                    '補正後候選總分':r.get(pre+' Grand Score') if not state.startswith('無法確認') else None}
+                detail={'樣本編號':sid,'評估側':side,'頸部角度(°)':r.get('頸部角度'),
+                    '頸部角度計算來源':r.get('頸部_v114_計分來源',''),
+                    '補正確認狀態':state,
+                    '參考側影片時間(秒)':r.get('參考側影片時間(秒)'),
+                    '作業條件設定來源':r.get('作業條件設定來源',''),
+                    '原始系統總分':r.get('原始自動Grand Score',r.get(pre+' Grand Score')),
+                    '設定後系統總分':r.get(pre+' Grand Score') if not state.startswith('無法確認') else None}
                 for field,col in [('上臂',pre+'上臂分數'),('前臂',pre+'前臂分數'),
                     ('手腕',pre+'手腕分數'),('腕扭轉',pre+'手腕扭轉分數'),
                     ('頸部','頸部分數'),('軀幹','軀幹分數'),('腿部','腿部分數'),
@@ -2756,12 +2871,16 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
                 template.append({
                     '照片編號':sid,'評估側':side,
                     '影片內分析經過時間(秒)':r.get('分析經過時間(秒)',r.get('時間(秒)')),
+                    '參考側影片時間(秒)':r.get('參考側影片時間(秒)'),
+                    '作業條件設定來源':r.get('作業條件設定來源',''),
+                    '系統肌肉使用加分':r.get('肌肉使用加分'),
+                    '系統負重施力加分':r.get('負重施力加分'),
                     '系統上臂角度(°)':r.get(pre+'上臂角度'),
                     '系統前臂角度(°)':r.get(pre+'前臂角度'),
                     '系統手腕角度(°)':r.get(pre+'手腕角度'),
                     '系統軀幹角度(°)':r.get('軀幹角度'),
                     '系統頸部2D代理角(°)':r.get('頸部角度'),
-                    '系統原始候選總分':state.get('原始Grand Score',r.get('原始自動Grand Score',r.get(pre+' Grand Score'))),
+                    '系統原始系統總分':state.get('原始Grand Score',r.get('原始自動Grand Score',r.get(pre+' Grand Score'))),
                     '系統人工補正後總分':state.get('複核後Grand Score'),
                     '系統人工補正後AL':state.get('複核後AL'),
                     '系統結果狀態':state.get('結果狀態','待判定'),
@@ -2776,17 +2895,19 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
         write_unique('研究驗證/人工評分比對空表.csv',pd.DataFrame(template).to_csv(index=False).encode('utf-8-sig'))
         write_unique('閱讀指南.txt',(
             'RULA 分析報告使用說明\n\n'
-            '原始分析/：未經照片批次補正的分析前候選結果，僅供驗證演算法。\n'
-            '複核後結果/：包含分析前設定的候選分數與人工補正後分數；品質／頸部待確認者留空。候選不代表人工已驗證。\n'
+            '原始分析/：未經照片批次補正的分析前系統評分結果，僅供驗證演算法。\n'
+            '複核後結果/：包含分析前設定的系統評分與人工補正後分數；品質／頸部待確認者留空。系統評分不代表已經人工驗證。\n'
             '複核後結果/逐張人工補正確認.csv：每張照片最後採用的條件及人工修改欄位。\n'
             '時間同步/：各鏡頭時間校正與影格對應。\n'
+            '評估結果/逐張時段與作業條件.csv：記錄每張所用負重、肌肉使用與來源，含人工批次修改資訊。\n'
             '照片：各樣本的原始影像和骨架圖。\n'
             '技術診斷/：僅供開發者追查關鍵點、品質判斷、算法來源；不屬一般正式報表。\n'
             '研究驗證/人工評分比對空表.csv：手動填入人工分數／角度；人工欄位預設空白。\n\n'
             '手腕：Hand 2D 優先，未達品質要求時 Pose 2D 備援；3D 不參與計分。\n'
-            '頸部：左右同步且皆有效時採同一個頸部分數；分級衝突可能改變行動等級時僅需人工確認頸部。\n'
+            '頸部：每側報表顯示實際計分使用的 2D 頸角及計算來源；左右同步只共用 RULA 頸部分數，不平均角度。\n'
+            '頸部分級衝突可能改變行動等級時，才需要局部人工確認頸部。\n'
             '所有角度是影像幾何估測值，不是經校準的解剖關節角度。\n'
-            '左右頸部分級衝突且可能改變行動等級時，原始報表的候選總分會留空；完成局部頸部確認後，請以「複核後結果」為準。\n'
+            '左右頸部分級衝突且可能改變行動等級時，原始報表的系統總分會留空；完成局部頸部確認後，請以「複核後結果」為準。\n'
             '只要有一側無有效評分，就不輸出完整雙側最高分。\n'
             'RULA 標準查表及角度真值尚需獨立驗證。\n'
         ).encode('utf-8'))
@@ -2864,7 +2985,7 @@ def v8_show_rejected_center():
     if selected==V113_KEEP:
         st.success('這筆側別樣本保留原自動評分；選擇其他處理方式時會更新可信統計與複核後報表。')
     elif selected==V113_EXCLUDE:
-        st.warning('已剔除此側樣本的可信分數；原圖、原始 CSV 與候選角度依然保留。雙側分析需兩側都可用，才會輸出完整雙側最高分。')
+        st.warning('已剔除此側樣本的可信分數；原圖、原始 CSV 與影像測量角度依然保留。雙側分析需兩側都可用，才會輸出完整雙側最高分。')
     elif selected==V113_MANUAL:
         v113_manual_form(sid,side,item,original)
         if (side,sid) not in st.session_state.v4_overrides:
@@ -2928,22 +3049,47 @@ def shared_neck_review_panel(context='angle'):
 
 
 def v8_show_neck_center():
-    st.subheader('共同頸部分數')
-    st.caption('左右同步時，同一時間點使用同一個頸部分數。當兩種分級可能改變最終行動等級，才局部人工確認；不以高可見度鏡頭直接猜真值。')
-    df=st.session_state.get('df_records')
-    if df is None or df.empty:
-        st.info('尚無可用頸部評估資料。')
+    """Directly show the same side-specific 2D angle that was used at scoring time.
+
+    Two synchronized cameras do not yield a calibrated shared neck angle;
+    their *scores*, not their geometric angles, are shared.
+    """
+    st.subheader('頸部角度與共同頸部分數')
+    st.caption('角度沿用同側耳－肩－髖 2D 幾何法；品質不足時使用原本備援法。左右角度分別列出，不取平均，也不代表解剖學頸椎真實角度。')
+    effective,_,cases=batch_current_effective(st.session_state)
+    sources={side:df for side,df in effective.items()
+             if isinstance(df,pd.DataFrame) and not df.empty}
+    if not sources:
+        st.info('沒有可用的頸部角度；若影格辨識失敗，可至剔除樣本查看原因。')
         return
-    dual=st.session_state.get('analyzed_mode')=='左右側同步計算'
-    if dual:
-        st.dataframe(shared_neck_case_table(batch_current_effective(st.session_state)[2],
-                 st.session_state.get('shared_neck_decisions',{})),
-                 use_container_width=True,hide_index=True)
+    rows=[]
+    for side,df in sources.items():
+        for _,rec in df.sort_values('樣本編號').iterrows():
+            sid=int(rec['樣本編號'])
+            choice=st.session_state.get('shared_neck_decisions',{}).get(sid)
+            case=cases.get(sid)
+            neck_score=(int(choice) if choice is not None else
+                (None if case and case['需要人工確認'] else rec.get('頸部分數')))
+            rows.append({'照片編號':sid,'視角':side,
+                '頸部角度(°)':rec.get('頸部角度'),
+                '角度來源':rec.get('頸部_v114_計分來源','既有 2D 備援'),
+                '採用頸部分數':neck_score,
+                '頸部分級狀態':('待頸部人工確認' if case and case['需要人工確認'] and choice is None
+                         else '人工已確認' if choice is not None
+                         else rec.get('頸部共用狀態','單側評估'))})
+    table=pd.DataFrame(rows).sort_values(['照片編號','視角'],ascending=[True,False])
+    st.dataframe(table,use_container_width=True,hide_index=True)
+    if len(sources)==2:
+        st.caption('同一照片的右側和左側頸角可能不同；共用的是 RULA 頸部分數，並不是把角度平均。')
+        with st.expander('左右側頸角差異與分級狀態',expanded=False):
+            st.dataframe(shared_neck_case_table(cases,st.session_state.get('shared_neck_decisions',{})),
+                         use_container_width=True,hide_index=True)
         shared_neck_review_panel('angle')
-    else:
-        st.dataframe(user_report_neck(df,st.session_state.get('analyzed_mode')),
-                     use_container_width=True,hide_index=True)
-    st.caption('E－S－H 原始幾何角與左右差異只保存於技術診斷，不代表經校準的解剖頸角。')
+    if len(table)>1:
+        with st.expander('查看頸部角度變化圖',expanded=False):
+            chart=table.pivot(index='照片編號',columns='視角',values='頸部角度(°)')
+            st.line_chart(chart,y_label='頸部 2D 代理角（°）')
+    st.caption('上述角度及各側計算來源同步出現在一般報表、複核後 CSV 和研究驗證空表。')
 
 # ==================== 【V9：多攝影機時間同步，Pose/RULA 演算法不變】 ====================
 # 每台影片的錨點是「相同真實事件」出現在該影片的秒數。
@@ -3339,7 +3485,10 @@ def user_report_side(df, side, with_scores=False):
         ('樣本編號','樣本編號'),('分析經過時間(秒)','時間(秒)'),('時間(秒)','同步相對時間(秒)'),
         ('評估側','評估側'),(f'{prefix}上臂角度','上臂角度(°)'),
         (f'{prefix}前臂角度','前臂角度(°)'),(f'{prefix}手腕角度','手腕角度(°)'),
+        ('頸部角度','頸部角度(°)'),('頸部_v114_計分來源','頸部角度計算來源'),
         ('頸部分數','頸部分數'),('頸部共用狀態','頸部確認狀態'),('軀幹角度','軀幹角度(°)'),
+        ('參考側影片時間(秒)','參考側影片時間(秒)'),('作業條件設定來源','作業條件設定來源'),
+        ('肌肉使用加分','肌肉使用加分'),('負重施力加分','負重施力加分'),
         (f'{prefix} Grand Score','RULA總分'),(f'{prefix} AL','行動等級'),
         ('品質狀態','品質狀態')]
     score_map = [(f'{prefix}上臂分數','上臂分數'),(f'{prefix}前臂分數','前臂分數'),
@@ -3372,8 +3521,12 @@ def user_report_dual(df, with_scores=False):
         ('右手腕角度','右手腕角度(°)'),
         ('左上臂角度','左上臂角度(°)'),('左前臂角度','左前臂角度(°)'),
         ('左手腕角度','左手腕角度(°)'),
+        ('右側頸部實際角度','右側頸部角度(°)'),
+        ('左側頸部實際角度','左側頸部角度(°)'),
         ('頸部分數','共同頸部分數'),('頸部共用狀態','頸部確認狀態'),
-        ('軀幹角度','軀幹角度(°)'),('右手 Grand Score','右手RULA總分'),
+        ('軀幹角度','軀幹角度(°)'),('參考側影片時間(秒)','參考側影片時間(秒)'),
+        ('作業條件設定來源','作業條件設定來源'),('肌肉使用加分','肌肉使用加分'),
+        ('負重施力加分','負重施力加分'),('右手 Grand Score','右手RULA總分'),
         ('左手 Grand Score','左手RULA總分'),('最終最高分','雙側最高分'),
         ('最終 AL','行動等級'),('最危害側','較高風險側'),('品質狀態','品質狀態')]
     scores=[('右手 Score A','右手Score A'),('左手 Score A','左手Score A'),
@@ -3395,15 +3548,19 @@ def user_report_reviewed(df, combined=False):
     if df is None or df.empty:
         return pd.DataFrame()
     if combined:
-        cols=['樣本編號','雙側結果狀態','採用頸部分數','頸部確認狀態','右手複核後分數','左手複核後分數',
-              '完整雙側最高分','完整雙側AL','最高風險側','部分可用側別']
+        cols=['樣本編號','雙側結果狀態','右側頸部角度(°)','左側頸部角度(°)',
+              '採用頸部分數','頸部確認狀態','右手複核後分數','左手複核後分數',
+              '完整雙側最高分','完整雙側AL','最高風險側','部分可用側別',
+              '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分']
     else:
-        cols=['樣本編號','評估側','採用頸部分數','頸部確認狀態','原始Grand Score','複核後Grand Score',
-              '複核後AL','結果狀態','照片補正狀態','是否納入可信統計','使用者選擇']
+        cols=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','採用頸部分數','頸部確認狀態',
+              '原始Grand Score','複核後Grand Score',
+              '複核後AL','結果狀態','照片補正狀態','是否納入可信統計','使用者選擇',
+              '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分']
     mapping={'原始Grand Score':'原始總分','複核後Grand Score':'複核後總分',
              '複核後AL':'複核後行動等級','完整雙側AL':'行動等級',
              '完整雙側最高分':'雙側最高分',
-             '是否納入可信統計':'是否有可用候選分數'}
+             '是否納入可信統計':'是否有可用系統評分'}
     return df[[c for c in cols if c in df.columns]].rename(columns=mapping).copy()
 
 
@@ -3723,12 +3880,57 @@ if page == 0:
     factory_mode = vid_front_file is None
     d,e,f=st.columns(3)
     with d: num_samples=v8_widget('slider','抽樣數量','num_samples',25,min_value=5,max_value=100)
-    with e: combo_muscle=v8_widget('selectbox','肌肉使用加分','muscle',MUSCLE_OPTIONS[0],options=MUSCLE_OPTIONS)
-    with f: combo_force=v8_widget('selectbox','負重施力加分','force',FORCE_OPTIONS[0],options=FORCE_OPTIONS)
+    with e: combo_muscle=v8_widget('selectbox','肌肉使用預設分數','muscle',MUSCLE_OPTIONS[0],options=MUSCLE_OPTIONS)
+    with f: combo_force=v8_widget('selectbox','負重／施力預設分數','force',FORCE_OPTIONS[0],options=FORCE_OPTIONS)
+    # 影片時段以必填的「右側／左側原始影片秒數」為準，不使用相對同步秒數。
+    with st.expander('🕒 依影片時段指定負重與肌肉使用（搬運作業建議設定）',expanded=False):
+        st.caption('例如右側影片第 4～12 秒正在搬重物，指定這段的負重／施力分數。'
+                   '未指定的秒數使用上方預設；左右側同步時會自動對到同一動作。'
+                   '肌肉使用須依整體作業的靜態／重複頻率判斷，不是看到單張肌肉用力就加 1。')
+        timeline_enabled=v8_widget('checkbox','啟用影片時段設定','timeline_enabled',False)
+        ref_side_cam='Right' if '右手側' in selected_sides else 'Left'
+        ref_file=vid_right_file if ref_side_cam=='Right' else vid_left_file
+        ref_title='右側' if ref_side_cam=='Right' else '左側'
+        ref_duration=None
+        if ref_file is not None:
+            try:
+                ref_duration=float(v9_video_metadata_from_bytes(ref_file.getvalue())['duration'])
+                st.caption(f'時間基準：{ref_title}原始影片，長度約 {ref_duration:.2f} 秒。請填它播放時顯示的秒數。')
+            except Exception as exc:
+                st.warning('暫時無法讀取側面影片長度；啟動分析時仍會檢查時間範圍。')
+        else:
+            st.info(f'請先上傳{ref_title}影片，再設定時間區間。')
+        if timeline_enabled:
+            timeline_count=v8_widget('number_input','需要設定幾個不同的作業時段','timeline_count',1,
+                                     min_value=1,max_value=8,step=1)
+            for ti in range(int(timeline_count)):
+                st.markdown(f'**時段 {ti+1}**')
+                cols=st.columns([1.5,1,1,1.5,1.5])
+                with cols[0]:
+                    v8_widget('text_input','名稱',f'timeline_{ti}_title',f'時段{ti+1}')
+                with cols[1]:
+                    v8_widget('number_input','開始（秒）',f'timeline_{ti}_start',0.0,
+                              min_value=0.0,step=0.5,format='%.2f')
+                with cols[2]:
+                    v8_widget('number_input','結束（秒）',f'timeline_{ti}_end',5.0 if ti==0 else 0.0,
+                              min_value=0.0,step=0.5,format='%.2f')
+                with cols[3]:
+                    v8_widget('selectbox','肌肉使用',f'timeline_{ti}_muscle',0,
+                              options=[0,1],format_func=lambda x:f'{x} 分')
+                with cols[4]:
+                    v8_widget('selectbox','負重／施力',f'timeline_{ti}_force',0,
+                              options=[0,1,2,3],format_func=lambda x:f'{x} 分')
+            try:
+                rula_timeline_rules(st.session_state.v8_values,ref_duration)
+                st.success('時段設定格式正確；可在其他設定完成後啟動分析。')
+            except ValueError as exc:
+                st.warning('時段尚未完成：'+str(exc))
+            st.caption('同一張只採用一組時段設定；區間不可重疊。時段以「開始含、結束不含」計算。'
+                       '如要只修改個別照片，分析後仍可使用照片批次補正。')
     with st.expander('骨架品質與遮擋篩檢（選用，預設保守）', expanded=False):
         v11_qc_policy=v8_widget('selectbox','複核警示敏感度','v11_qc_policy',V11_QC_MODES[0],options=V11_QC_MODES)
         st.caption('只列嚴重疑慮是預設；頭頸與手臂可能重疊時先做幾何及前後影格檢查，仍不可靠才送人工複核。這是品質風險篩檢，不能證明關節實際位置。')
-    st.info('未上傳正面影片：所選側視角仍可分析，但需在第 3 步人工確認正面視角相關補正。' if factory_mode else '已提供正面影片：可輔助五項姿勢補正；下一步校正所選鏡頭的共同時間。')
+    st.info('未上傳正面影片：仍可完成所選側的影像角度分析；正面視角無法確定的補正請依現場資訊設定。' if factory_mode else '已提供正面影片：可輔助五項姿勢補正；下一步校正所選鏡頭的共同時間。')
 
 elif page == 1:
     st.subheader('鏡頭時間同步｜只需校正一次')
@@ -3848,7 +4050,7 @@ elif page == 2:
                     manual_front[(side_name,flag)]=v8_widget('checkbox',side_label+'｜'+label,
                         'manual_'+side_name+'_'+flag,False)
     if factory_mode:
-        st.info('沒有正面影片時，相關補正預設採用此處設定，並在結果標記為候選；若部分照片條件不同，可選擇批次修改。')
+        st.info('沒有正面影片時，相關補正採用此處的預設條件；少數照片若不同，可在分析後批次修改。')
     else:
         st.caption('影像估測值並不是臨床量測精度；正面鏡頭關鍵點不足時，啟用自動辨識的樣本會被略過。')
     st.caption('頸部會以同側耳朵、肩膀與髖部計算相對角度；關鍵點不足時使用備援方式並保留診斷紀錄。')
@@ -3910,7 +4112,7 @@ def manual_without_front(side_name):
     """沒有 Front 時，只使用操作員已明確確認的補正，不將缺圖推論為否。"""
     if not factory_mode or side_name not in rula_eval_sides(eval_mode):
         raise ValueError('無正面模式或評估側別不符')
-    # 分析前只是候選值；正式採信必須在分析後的照片批次補正中心確認。
+    # 分析前只是系統計算值；正式採信必須在分析後的照片批次補正中心確認。
     return {flag:bool(manual_front.get((side_name,flag),False)) for flag in front_labels}
 
 
@@ -3928,7 +4130,7 @@ if page == 4:
     if not st.session_state.v9_confirmed:
         st.warning('先到「鏡頭時間同步」預覽畫面並確認，否則不會開始分析。')
     if factory_mode:
-        st.info('沒有正面影片：使用這裡設定作為候選分數；只有作業階段不同時再多選照片調整，不需逐張確認。')
+        st.info('沒有正面影片：使用這裡設定作為系統評分；只有作業階段不同時再多選照片調整，不需逐張確認。')
     st.caption('執行後自動跳到結果總覽；原本的分析及 ZIP 報表功能皆保留。')
 
 # 執行分析按鈕
@@ -3997,6 +4199,19 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
 
         m_val = int(combo_muscle.split(":")[0])
         f_val = int(combo_force.split(":")[0])
+        # 時段使用主側面影片的原始播放秒數；正面鏡頭不做時間基準。
+        timeline_ref='Right' if '右手側' in required_sides else 'Left'
+        try:
+            timeline_duration=float(v9_video_metadata_from_bytes(
+                (vid_right_file if timeline_ref=='Right' else vid_left_file).getvalue())['duration'])
+            timeline_rules=rula_timeline_rules(st.session_state.v8_values,timeline_duration)
+        except (ValueError,TypeError) as exc:
+            st.error('影片時段設定有誤：'+str(exc)+'。請返回「影片與基本設定」修正。')
+            st.stop()
+        st.session_state['timeline_rules_used']=[dict(x) for x in timeline_rules]
+        st.session_state['timeline_reference_camera']=timeline_ref
+        st.session_state['timeline_default_muscle']=m_val
+        st.session_state['timeline_default_force']=f_val
 
         # ==================== 【模式 A：左右側同步計算 (三鏡頭分開計算、分析與擷取)】 ====================
         if is_dual_mode:
@@ -4073,6 +4288,8 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                 total_samples = len(sample_times)
                 for i, sample_time in enumerate(sample_times):
                     sec = round(float(sample_time), 2)
+                    local_ref_time=sync_samples[i+1][timeline_ref+'影片時間(秒)']
+                    m_at,f_at,stage_source=rula_timeline_at(local_ref_time,timeline_rules,m_val,f_val)
                     idx_front = sync_samples[i+1]['Front影格索引'] if cap_front is not None else None
                     idx_right = sync_samples[i+1]['Right影格索引']
                     idx_left = sync_samples[i+1]['Left影格索引']
@@ -4097,7 +4314,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                         if is_factory_mode:
                             front_mods_r= manual_without_front('右手側')
                             front_mods_l= manual_without_front('左手側')
-                            front_ok_r=front_ok_l=True  # 人工初始候選值，尚未按照片確認；不是 AI 偵測到 Front
+                            front_ok_r=front_ok_l=True  # 人工初始系統計算值，尚未按照片確認；不是 AI 偵測到 Front
                         else:
                             front_ok_r, front_mods_r = analyze_front_camera(f_frame, pose, "右手側")
                             front_ok_l, front_mods_l = analyze_front_camera(f_frame, pose, "左手側")
@@ -4108,14 +4325,14 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
 
                         # 2. 右側鏡頭只評估右側關鍵點；低品質正面補正會使該樣本略過，不默認為「否」。
                         succ_r, data_r, img_r, conf_r = analyze_side_camera(
-                            r_frame, pose, "右手側", front_mods_r, m_val, f_val,
+                            r_frame, pose, "右手側", front_mods_r, m_at, f_at,
                             manual_mods=build_manual_mods("右手側"),
                             hand_task=hand_task, hand_scoring_policy=v6_hand_policy
                         )
 
                         # 3. 左側鏡頭只評估左側關鍵點。
                         succ_l, data_l, img_l, conf_l = analyze_side_camera(
-                            l_frame, pose, "左手側", front_mods_l, m_val, f_val,
+                            l_frame, pose, "左手側", front_mods_l, m_at, f_at,
                             manual_mods=build_manual_mods("左手側"),
                             hand_task=hand_task, hand_scoring_policy=v6_hand_policy
                         )
@@ -4153,7 +4370,8 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                                 keypoint_records.append({"樣本編號": i+1, "時間(秒)": sec, **snap_r})
                             rec_r = {"樣本編號": i + 1, "時間(秒)": sec, "評估側": "右手側", "右側信賴度(%)": round(conf_r, 1)}
                             rec_r.update(data_r)
-                            rec_r['正面補正來源']='初始候選（無正面影片，待照片確認）' if is_factory_mode else '正面影像或人工備援'
+                            rec_r.update(rula_timeline_video_fields(local_ref_time,timeline_rules,m_val,f_val))
+                            rec_r['正面補正來源']='初始設定（無正面影片，待照片確認）' if is_factory_mode else '正面影像或人工備援'
                             right_only_records.append(rec_r)
 
                             img_r = put_chinese_text(img_r, f"時間: {sec}s | 獨立擷取: 右手側", (15, 15), (0, 255, 255), 20)
@@ -4188,7 +4406,8 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                                 keypoint_records.append({"樣本編號": i+1, "時間(秒)": sec, **snap_l})
                             rec_l = {"樣本編號": i + 1, "時間(秒)": sec, "評估側": "左手側", "左側信賴度(%)": round(conf_l, 1)}
                             rec_l.update(data_l)
-                            rec_l['正面補正來源']='初始候選（無正面影片，待照片確認）' if is_factory_mode else '正面影像或人工備援'
+                            rec_l.update(rula_timeline_video_fields(local_ref_time,timeline_rules,m_val,f_val))
+                            rec_l['正面補正來源']='初始設定（無正面影片，待照片確認）' if is_factory_mode else '正面影像或人工備援'
                             left_only_records.append(rec_l)
 
                             img_l = put_chinese_text(img_l, f"時間: {sec}s | 獨立擷取: 左手側", (15, 15), (0, 255, 255), 20)
@@ -4221,6 +4440,10 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                             comb_row = {
                                 "樣本編號": i + 1,
                                 "時間(秒)": sec,
+                                "參考側影片時間(秒)":round(float(local_ref_time),3),
+                                "作業條件設定來源":stage_source,
+                                "肌肉使用加分":m_at,
+                                "負重施力加分":f_at,
                                 "頸部角度": np.nan,  # 相反視角 2D 頸角不得算術平均成解剖角
                                 "頸部分數": data_r['頸部分數'],
                                 "頸部共用狀態": data_r.get('頸部共用狀態','未知'),
@@ -4280,7 +4503,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                                 "品質狀態":('需人工複核' if '需人工複核' in (data_r.get('品質狀態'),data_l.get('品質狀態')) else ('留意' if '留意' in (data_r.get('品質狀態'),data_l.get('品質狀態')) else '通過')),
                                 "品質可直接採信":bool(data_r.get('品質可直接採信') and data_l.get('品質可直接採信')),
                                 "品質原因":'右側：'+str(data_r.get('品質原因',''))+'；左側：'+str(data_l.get('品質原因','')),
-                                "品質計分說明":('候選分數：至少一側需複核' if not (data_r.get('品質可直接採信') and data_l.get('品質可直接採信')) else '品質篩檢通過')
+                                "品質計分說明":('系統評分：至少一側需複核' if not (data_r.get('品質可直接採信') and data_l.get('品質可直接採信')) else '品質篩檢通過')
                             }
                             combined_records.append(comb_row)
                     else:
@@ -4349,12 +4572,12 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                 zf.writestr("Diagnostics/Rejected_Samples_Detail.csv",pd.DataFrame(essential_reviews).to_csv(index=False).encode('utf-8-sig'))
                 zf.writestr("Diagnostics/Quality_Notices.csv",pd.DataFrame(informational_notices).to_csv(index=False).encode('utf-8-sig'))
                 if is_factory_mode:
-                    manual_rows=[{'側別':side, **{front_labels[flag]: ('有（+1分）' if manual_front.get((side,flag),False) else '無（初始候選值）') for flag in front_labels}}
+                    manual_rows=[{'側別':side, **{front_labels[flag]: ('有（+1分）' if manual_front.get((side,flag),False) else '無（初始系統計算值）') for flag in front_labels}}
                                  for side in ('右手側','左手側')]
                     zf.writestr('評估結果/無正面人工補正確認.csv',pd.DataFrame(manual_rows).to_csv(index=False).encode('utf-8-sig'))
                 zf.writestr('評估結果/攝影與補正方式.txt',(
                     '評估模式：'+('雙側（無正面）' if is_factory_mode else '三視角完整分析')+'\n'
-                    '正面視角補正：'+('初始候選值；照片批次補正後確認' if is_factory_mode else '以正面影像估算／必要時人工備援')+'\n'
+                    '正面視角補正：'+('初始系統計算值；照片批次補正後確認' if is_factory_mode else '以正面影像估算／必要時人工備援')+'\n'
                     '注意：缺少正面影片不能推論外展、跨中線、側彎等均不存在。\n'
                     ).encode('utf-8'))
                 zf.writestr("Diagnostics/V11_1_Skeleton_Quality.csv",pd.DataFrame(v11_qc_diagnostics).to_csv(index=False).encode('utf-8-sig'))
@@ -4468,6 +4691,8 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                 total_samples = len(sample_times)
                 for i, sample_time in enumerate(sample_times):
                     sec = round(float(sample_time), 2)
+                    local_ref_time=sync_samples[i+1][timeline_ref+'影片時間(秒)']
+                    m_at,f_at,stage_source=rula_timeline_at(local_ref_time,timeline_rules,m_val,f_val)
                     idx_front = sync_samples[i+1]['Front影格索引'] if cap_front is not None else None
                     idx_side = sync_samples[i+1][side_camera+'影格索引']
                     if cap_front is not None:
@@ -4492,7 +4717,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                             if not front_ok:
                                 front_mods = manual_front_fallback()
                         succ_s, data, side_annotated, conf = analyze_side_camera(
-                            s_frame, pose, target_side, front_mods, m_val, f_val,
+                            s_frame, pose, target_side, front_mods, m_at, f_at,
                             manual_mods=build_manual_mods(target_side),
                             hand_task=hand_task, hand_scoring_policy=v6_hand_policy
                         )
@@ -4523,7 +4748,8 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                                 "視角信賴度(%)": round(conf, 1)
                             }
                             record.update(data)
-                            record['正面補正來源'] = ('初始候選（無正面影片，待照片確認）' if cap_front is None
+                            record.update(rula_timeline_video_fields(local_ref_time,timeline_rules,m_val,f_val))
+                            record['正面補正來源'] = ('初始設定（無正面影片，待照片確認）' if cap_front is None
                                                      else '正面影像或人工備援')
                             records.append(record)
 
@@ -4589,7 +4815,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                     zf.writestr("評估結果/評分明細.csv", user_report_side(df_result,target_side,True).to_csv(index=False).encode('utf-8-sig'))
                 if cap_front is None:
                     manual_rows=[{'側別':target_side, **{
-                        front_labels[flag]: ('有（+1分）' if manual_front.get((target_side,flag),False) else '無（初始候選值）')
+                        front_labels[flag]: ('有（+1分）' if manual_front.get((target_side,flag),False) else '無（初始系統計算值）')
                         for flag in front_labels}}]
                     zf.writestr('評估結果/無正面人工補正確認.csv',
                                 pd.DataFrame(manual_rows).to_csv(index=False).encode('utf-8-sig'))
@@ -4743,7 +4969,7 @@ def v4_make_zip(original_zip, reviews, anomaly_frames):
 
 def v4_show_review_center():
     st.subheader("異常影格審核／逐張人工修正／風險時間軸")
-    st.caption('顯示系統自動計算與預設補正的候選分數；人工批次修改後會重新查表。骨架照片印字是分析當下候選值。')
+    st.caption('顯示系統自動計算與預設補正的系統評分；人工批次修改後會重新查表。骨架照片印字是分析當下系統計算值。')
     mode = st.session_state.analyzed_mode
     both = mode == "左右側同步計算"
     available, batch_status, _ = batch_current_effective(st.session_state)
@@ -4830,7 +5056,7 @@ def v4_show_review_center():
             st.info("目前沒有人工修正，原始分數維持不變。")
 
     if tool == '📈 覆核時間軸':
-        st.caption("以原始候選分數與可選的人工補正後分數對照；未經人工複核不代表已驗證準確。")
+        st.caption("以原始系統評分與可選的人工補正後分數對照；未經人工複核不代表已驗證準確。")
         side = st.selectbox("時間軸評估側", list(available), key="v4_chart_side")
         series = available[side].sort_values("時間(秒)").copy()
         prefix = "右手" if side == "右手側" else "左手"
@@ -4900,9 +5126,9 @@ if st.session_state.v9_screen == 'results':
         _,batch_states,_=batch_current_effective(st.session_state)
         batch_unknown=sum(x.startswith('無法確認') for x in batch_states.values())
         if batch_unknown:
-            st.warning(f'有 {batch_unknown} 張照片的補正被標記為「無法確認」；這些照片暫不列入可用候選統計。')
+            st.warning(f'有 {batch_unknown} 張照片的補正被標記為「無法確認」；這些照片暫不列入風險統計。')
         else:
-            st.info('自動分析與初始人工設定已產生候選結果；照片批次補正為選用工具，不必逐張勾選。')
+            st.info('已依影片時段、影像辨識和預設作業條件產生 RULA 評分；僅在條件不同時才需批次修改。')
         (tab_overview, tab_batch, tab_review, tab_rejected, tab_angles,
          tab_gallery, tab_reports, tab_download) = st.tabs([
             '📈 風險總覽', '✅ 照片批次補正', '🔎 異常／人工覆核', '🧩 剔除樣本',
@@ -4913,12 +5139,31 @@ if st.session_state.v9_screen == 'results':
                 st.subheader('RULA 風險總覽')
                 info=st.session_state.get('skipped_info',{})
                 st.caption(f'攝影方式：{st.session_state.get("capture_mode","既有模式")}｜跳過影格仍保留於剔除樣本複核。')
+                with st.expander('查看本次影片時段如何套用到每張照片',expanded=False):
+                    if st.session_state.get('timeline_rules_used'):
+                        st.caption('使用原始側面影片的播放秒數；未指定時段採用分析前預設分數。')
+                        st.dataframe(pd.DataFrame([{'作業階段':x['name'],'開始(秒)':x['start'],
+                            '結束(秒)':x['end'],'肌肉使用加分':x['muscle'],'負重施力加分':x['force']}
+                            for x in st.session_state['timeline_rules_used']]),use_container_width=True,hide_index=True)
+                    else:
+                        st.caption('本次沒有另外指定影片時段，全部採用分析前作業條件。')
+                    frame_map,_,_=batch_current_effective(st.session_state)
+                    rows=[]
+                    for side,df in frame_map.items():
+                        if not isinstance(df,pd.DataFrame) or df.empty:continue
+                        for _,r in df.iterrows():
+                            rows.append({'照片編號':int(r['樣本編號']),'評估側':side,
+                                '側面影片秒數':r.get('參考側影片時間(秒)'),
+                                '肌肉使用':r.get('肌肉使用加分'),'負重／施力':r.get('負重施力加分'),
+                                '設定來源':r.get('作業條件設定來源','預設條件')})
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
                 if st.session_state.get('v9_sync_summary') is not None:
                     with st.expander('本次鏡頭時間同步結果',expanded=False):
                         st.dataframe(st.session_state.v9_sync_summary,use_container_width=True,hide_index=True)
                 reviewed, reviewed_combined=v113_current_reports()
                 if (df_show is None or df_show.empty) and reviewed_combined.empty:
-                    st.warning('目前尚無可用候選結果；可到「剔除樣本」查看品質或辨識失敗原因。')
+                    st.warning('目前尚無可用系統評分結果；可到「剔除樣本」查看品質或辨識失敗原因。')
                 else:
                     if mode_now=='左右側同步計算':
                         if reviewed_combined.empty:
@@ -4926,7 +5171,7 @@ if st.session_state.v9_screen == 'results':
                         else:
                             full=reviewed_combined[reviewed_combined['雙側結果狀態']=='完整雙側有效']
                             effective=pd.to_numeric(full['完整雙側最高分'],errors='coerce').dropna()
-                        st.metric('完整雙側可用候選',len(effective))
+                        st.metric('完整雙側可用評分',len(effective))
                         left_ok=int(((reviewed['評估側']=='左手側') & (reviewed['是否納入可信統計'])).sum()) if not reviewed.empty else 0
                         right_ok=int(((reviewed['評估側']=='右手側') & (reviewed['是否納入可信統計'])).sum()) if not reviewed.empty else 0
                         st.caption(f'側別可用：右側 {right_ok} 筆、左側 {left_ok} 筆。若僅單側可用，完整雙側最高分留空，但該側原始資料與複核結果保留。')
@@ -4934,7 +5179,7 @@ if st.session_state.v9_screen == 'results':
                         reviewed_ok=reviewed[reviewed['是否納入可信統計']] if not reviewed.empty else pd.DataFrame()
                         effective=pd.to_numeric(reviewed_ok['複核後Grand Score'],errors='coerce').dropna() if not reviewed_ok.empty else pd.Series(dtype='float64')
                     a,b,c=st.columns(3)
-                    a.metric('可用候選分數',len(effective))
+                    a.metric('可用系統評分',len(effective))
                     b.metric('平均 Grand Score',f'{effective.mean():.2f}' if not effective.empty else '—')
                     c.metric('AL3／AL4 比例',f'{effective.ge(5).mean()*100:.1f}%' if not effective.empty else '—')
                     if not effective.empty:
@@ -4947,8 +5192,8 @@ if st.session_state.v9_screen == 'results':
                     elif not reviewed.empty:
                         st.line_chart(reviewed[reviewed['是否納入可信統計']].set_index('樣本編號')[['複核後Grand Score']],y_label='RULA Grand Score')
                     else:
-                        st.warning('目前尚無可用的候選評分。')
-                    st.caption('這裡是可用候選評分的描述性統計，可能包含未逐張人工確認的補正；若品質或頸部分級仍待必要複核會排除。')
+                        st.warning('目前尚無可用的系統評分。')
+                    st.caption('這裡是可用系統評分的描述性統計，可能包含未逐張人工確認的補正；若品質或頸部分級仍待必要複核會排除。')
                     st.caption('平均數僅作描述性統計，不能取代 RULA 對高風險姿勢的判斷。')
                 st.info('時間欄位說明：「共同時間」以同步事件為 0 秒；「分析經過時間」從取樣開始算 0 秒。若無正面影片，正面視角相關補正由使用者人工確認。')
         if tab_batch.open:
@@ -5050,7 +5295,7 @@ if st.session_state.v9_screen == 'results':
                             st.session_state.get('batch_profiles',{}),st.session_state.get('batch_confirmed',set())))
                     render_blob_download_button(finalized,st.session_state.zip_filename,
                                                 f'📥 下載 {mode_now} 原始＋複核後報表 ZIP')
-                st.caption('ZIP 的「原始分析」保留最初候選；「複核後結果」包含沿用設定的候選及人工修正結果，並標明來源。未經人工驗證不應稱為準確率。')
+                st.caption('ZIP 的「原始分析」保留首次系統計算結果；「複核後結果」包含沿用設定的系統初始與人工修正結果，並標明來源。未經人工驗證不應稱為準確率。')
 # 只有分析前六步才顯示底部「上一步／下一步」；結果頁使用分頁，不再有步驟按鈕。
 if st.session_state.v9_screen == 'setup':
     st.divider()

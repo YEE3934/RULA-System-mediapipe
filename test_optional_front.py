@@ -67,7 +67,7 @@ for cam in ('Right','Left'):
 for fragment in [
     "is_factory_mode = vid_front_file is None",
     "if missing_sides:",
-    "初始候選（無正面影片，待照片確認）",
+    "初始設定（無正面影片，待照片確認）",
     "front_mods_r= manual_without_front('右手側')",
     "front_mods_l= manual_without_front('左手側')",
     "front_mods = manual_without_front(target_side)",
@@ -77,7 +77,7 @@ for fragment in [
     "'has_front_view':not is_factory_mode",
     "'評估結果/無正面人工補正確認.csv'",
     "正面鏡頭（選填，建議上傳）",
-    "RULA_DIRECTIONAL_DEFAULTS_2026-10-30",
+    "RULA_VIDEO_TIMELINE_AUTO_2026-10-30",
 ]:
     assert fragment in source, fragment
 assert '正面鏡頭（必要）' not in source

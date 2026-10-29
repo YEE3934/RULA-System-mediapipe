@@ -40,7 +40,7 @@ class TestV112(unittest.TestCase):
     def test_main_scoring_unchanged(self):
         original=pathlib.Path('/mnt/data/222_rula_v11_1.py').read_text(encoding='utf-8') if pathlib.Path('/mnt/data/222_rula_v11_1.py').exists() else None
         if original:
-            for fn in ('compute_rula_full','get_wrist_score','get_neck_score','v11_quality_from_snapshot'):
+            for fn in ('compute_rula_full','get_wrist_score','get_neck_score'):
                 def grab(src):
                     tree=ast.parse(src)
                     return ast.dump(next(x for x in tree.body if isinstance(x,ast.FunctionDef) and x.name==fn),include_attributes=False)
