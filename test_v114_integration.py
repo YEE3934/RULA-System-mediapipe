@@ -8,7 +8,7 @@ import numpy as np,pandas as pd,cv2
 p=Path(__file__).resolve().parents[1]/'222.py'
 tree=ast.parse(p.read_text(encoding='utf-8'))
 funcs={n.name:n for n in tree.body if isinstance(n,ast.FunctionDef)}
-names=['calculate_2d_angle','calculate_3d_angle','get_upper_arm_score','get_lower_arm_score',
+names=['side_directional_posture','calculate_2d_angle','calculate_3d_angle','get_upper_arm_score','get_lower_arm_score',
        'get_wrist_score','get_neck_score','get_trunk_score','compute_rula_full',
        'v8_neck_candidate','v114_same_side_neck','v114_overlay_neck_lines','analyze_side_camera']
 vals={}

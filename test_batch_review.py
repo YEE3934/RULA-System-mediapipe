@@ -40,15 +40,15 @@ raw={R:pd.DataFrame([make(R,i,neck_angle=5 if i<3 else 25) for i in range(1,6)])
      L:pd.DataFrame([make(L,i,neck_angle=5 if i<3 else 25) for i in range(1,6)])}
 copy={side:df.copy(deep=True) for side,df in raw.items()}
 empty,untrusted,cases=ns['batch_effective_frames'](raw,{},set())
-assert len(untrusted)==10 and all(v=='待確認整張補正' for v in untrusted.values())
+assert len(untrusted)==10 and all(v=='採用分析前設定（候選）' for v in untrusted.values())
 reviewed,combined=ns['v113_build_reviewed_data'](empty,[],{}, {},batch_status=untrusted)
-assert reviewed['複核後Grand Score'].isna().all(),reviewed
-assert combined['完整雙側最高分'].isna().all()
+assert reviewed['複核後Grand Score'].notna().all(),reviewed
+assert combined['完整雙側最高分'].notna().all()
 # confirm 10 pictures in single call, no change => production table scores conserved.
 keys=[(side,sid) for side in (R,L) for sid in range(1,6)]
 profiles,confirmed=ns['batch_update_profiles']({},set(),keys,{'trunk_twisted':'keep','force':'keep'})
 eff,status,cases=ns['batch_effective_frames'](raw,profiles,confirmed)
-assert len(status)==10 and all(v=='補正已確認' for v in status.values())
+assert len(status)==10 and all(v=='補正已人工確認' for v in status.values())
 assert all(eff[R].loc[i-1,'右手 Grand Score']==raw[R].loc[i-1,'右手 Grand Score'] for i in range(1,6))
 # Selected R picture 3: twisting on only this picture; L unaffected.
 profiles,confirmed=ns['batch_update_profiles'](profiles,confirmed,[(R,3)],{'trunk_twisted':True})

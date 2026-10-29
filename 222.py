@@ -53,7 +53,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
 # which is typically read-only on hosted deployments.
 POSE_MODEL_COMPLEXITY = 1
-APP_BUILD_TAG = "RULA_FINAL_BATCH_REVIEW_2026-10-29"
+APP_BUILD_TAG = "RULA_DIRECTIONAL_DEFAULTS_2026-10-30"
 
 # ==================== 【沿用 v6 RULA 查表矩陣：仍需標準工作表逐格核對】 ====================
 TABLE_A = {
@@ -996,6 +996,59 @@ def landmarks_meet_visibility(results, required_indices, threshold=POSE_MIN_VISI
     values = _visibility_values(results, required_indices)
     return bool(values) and all(v >= threshold for v in values)
 
+
+
+# 側面有向角度：畫面 X 正負不直接表示前後，必須先確認頭部朝向。
+# 輸出是 2D 投影「候選姿勢」，非實際 3D 頸椎或肩關節量角。
+def side_directional_posture(nose, ear, eye, shoulder_center, hip_center,
+                             shoulder, elbow, nose_vis=1., ear_vis=1., eye_vis=1.):
+    def p(x):
+        a=np.asarray(x,dtype=float)
+        return a if a.shape==(2,) and np.all(np.isfinite(a)) else None
+    pts=[p(v) for v in (nose,ear,eye,shoulder_center,hip_center,shoulder,elbow)]
+    out={'face_side':'不明', 'trunk_signed_deg':np.nan, 'upper_arm_signed_deg':np.nan,
+         'neck_proxy_deg':np.nan, 'trunk_extended':None, 'upper_arm_extended':None,
+         'neck_extended':None,'diagnostic':'頭部朝向或關節品質不足，維持人工初始設定'}
+    if any(v is None for v in pts): return out
+    no,ea,ey,sc,hc,sh,el=pts
+    torso=sc-hc; arm=el-sh
+    torso_len=float(np.linalg.norm(torso)); arm_len=float(np.linalg.norm(arm))
+    face_x=float(no[0]-ea[0]); face_dist=float(np.linalg.norm(no-ea))
+    # 鼻與眼相對同一耳朵都要指向同側；例如低頭遮擋時鼻點會突然跑到耳朵另一邊。
+    eye_x=float(ey[0]-ea[0])
+    if (nose_vis<0.55 or ear_vis<0.5 or eye_vis<0.5 or torso_len<28 or arm_len<16 or
+        face_dist<10 or abs(face_x)<max(7.,0.075*torso_len) or
+        abs(eye_x)<max(6.,0.04*torso_len) or eye_x*face_x<=0):
+        return out
+    sign=1. if face_x>0 else -1.
+    out['face_side']='面向畫面右' if sign>0 else '面向畫面左'
+    # 軀幹由髖指向肩；向臉部前方的偏移為正，向背部為負。
+    signed_tk=float(np.degrees(np.arctan2(sign*torso[0],-torso[1])))
+    out['trunk_signed_deg']=round(signed_tk,2)
+    # 用軀幹自身下向量及其前向法線表示上臂屈伸，避免直接看肘部在肩左或右。
+    down=-torso/torso_len
+    front=sign*np.array([down[1],-down[0]])
+    signed_arm=float(np.degrees(np.arctan2(np.dot(arm,front),np.dot(arm,down))))
+    out['upper_arm_signed_deg']=round(signed_arm,2)
+    if -65.<=signed_tk<=-10.:out['trunk_extended']=True
+    elif signed_tk>=-4.:out['trunk_extended']=False
+    # -10 至 -4 度屬於接近閾值的模糊區，沿用人工設定。
+    if signed_arm < -23.:out['upper_arm_extended']=True
+    elif signed_arm > -17.:out['upper_arm_extended']=False
+    # 頭部候選：耳→眼代表臉部朝向，扣除軀幹的投影傾斜；非頸椎量測。
+    # 僅對非常明顯的仰頭採用自動判讀，其餘接近邊界時維持人工設定。
+    if eye_vis>=0.58:
+        eye_vec=ey-ea
+        head_forward=float(sign*eye_vec[0]);head_len=float(np.linalg.norm(eye_vec))
+        if head_len>10. and head_forward>=max(6.,0.18*head_len) and abs(signed_tk)<80.:
+            head_pitch=float(np.degrees(np.arctan2(-eye_vec[1],head_forward)))
+            relative_pitch=head_pitch+signed_tk
+            out['neck_proxy_deg']=round(relative_pitch,2)
+            if relative_pitch>=40.:out['neck_extended']=True
+            elif relative_pitch<=18.:out['neck_extended']=False
+    out['diagnostic']='側面有向角度為候選估測；邊界／遮擋沿用人工初始設定'
+    return out
+
 def get_upper_arm_score(angle, is_abducted=False, is_raised=False, is_supported=False, is_extended=False):
     """RULA upper-arm base score + modifiers; extension direction needs visual/manual confirmation."""
     if is_extended and angle > 20:
@@ -1567,6 +1620,12 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         ear = pt2d(t_ear) if n_lm[t_ear].visibility >= n_lm[o_ear].visibility else pt2d(o_ear)
         eye_idx = 2 if n_lm[2].visibility >= n_lm[5].visibility else 5
         visible_eye = pt2d(eye_idx)
+        # 只在耳與眼屬同側時估測頸部後仰，避免左右臉部點混用。
+        face_pair_valid = bool((ear is not None) and
+             ((eye_idx == 2 and float(n_lm[t_ear].visibility) >= float(n_lm[o_ear].visibility) and t_ear == 8) or
+              (eye_idx == 5 and float(n_lm[t_ear].visibility) >= float(n_lm[o_ear].visibility) and t_ear == 7) or
+              (eye_idx == 2 and float(n_lm[o_ear].visibility) > float(n_lm[t_ear].visibility) and o_ear == 8) or
+              (eye_idx == 5 and float(n_lm[o_ear].visibility) > float(n_lm[t_ear].visibility) and o_ear == 7)))
 
         # 目標側上肢與手掌點；不以對側手臂替換目標側。
         el, wr, th, ix, pk = pt2d(t_el), pt2d(t_wr), pt2d(t_th), pt2d(t_ix), pt2d(t_pk)
@@ -1667,23 +1726,30 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         if not np.isfinite(ang_lower_arm) or not np.isfinite(ang_upper_arm) or not np.isfinite(ang_trunk) or not np.isfinite(ang_neck) or not np.isfinite(ang_wrist):
             return False, None, frame_work, conf_side
 
-        # 上臂向後伸展：側面鼻尖指向作為身體朝前的代理方向。
-        # 側視不足／臉部遮擋時，回到人工輸入，而不是默認「沒有後伸」。
+        # 有向姿勢候選：鏡頭面向不同／身體左右轉向時，不直接拿畫面 X 差值當前後。
+        directional = side_directional_posture(
+            pt2d(0), ear, visible_eye, sh_center, hp_center, sh, el,
+            float(n_lm[0].visibility),
+            max(float(n_lm[t_ear].visibility),float(n_lm[o_ear].visibility)),
+            float(n_lm[eye_idx].visibility) if face_pair_valid else 0.0)
+        is_extended = bool(manual_mods.get("upper_arm_extended",False))
+        is_trunk_extended = bool(manual_mods.get("trunk_extended",False))
+        is_neck_extended = bool(manual_mods.get("neck_extended",False))
         auto_extension_used = False
         auto_extension_warning = ""
-        is_extended = bool(manual_mods.get("upper_arm_extended", False))
-        if auto_selection.get("upper_arm_extended", False):
-            nose_visible = float(getattr(n_lm[0], "visibility", 0.0)) >= 0.45
-            face_forward_delta = float(pt2d(0)[0] - sh[0]) if nose_visible else 0.0
-            upper_arm_delta = float(el[0] - sh[0])
-            arm_length = float(np.linalg.norm(el - sh))
-            # 朝向清楚且上臂後移超過約 20° 才自動判定；其餘仍標註幾何限制。
-            if nose_visible and abs(face_forward_delta) > max(12.0, 0.15 * torso_len) and arm_length > 15:
-                backward_projection = -np.sign(face_forward_delta) * upper_arm_delta / arm_length
-                is_extended = bool(backward_projection > np.sin(np.radians(20.0)) and ang_upper_arm > 20.0)
-                auto_extension_used = True
+        if auto_selection.get("upper_arm_extended",True):
+            candidate=directional['upper_arm_extended']
+            if candidate is not None:
+                is_extended=bool(candidate)
+                auto_extension_used=True
             else:
-                auto_extension_warning = "側面朝向不明，使用人工設定"
+                auto_extension_warning="側面朝向／20度附近不確定，沿用人工初始設定"
+        if auto_selection.get("trunk_extended",True):
+            candidate=directional['trunk_extended']
+            if candidate is not None:is_trunk_extended=bool(candidate)
+        if auto_selection.get("neck_extended",True):
+            candidate=directional['neck_extended']
+            if candidate is not None:is_neck_extended=bool(candidate)
 
         # RULA 查表計算；不可由影像可靠辨識的條件繼續採用人工輸入。
         s_ua = get_upper_arm_score(
@@ -1703,13 +1769,13 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             ang_trunk,
             is_twisted=manual_mods.get("trunk_twisted", False),
             is_side_bending=front_mods.get("is_side_bending", False),
-            is_extended=manual_mods.get("trunk_extended", False),
+            is_extended=is_trunk_extended,
         )
         s_nk = get_neck_score(
             ang_neck,
             is_twisted=manual_mods.get("neck_twisted", False),
             is_side_bending=front_mods.get("is_neck_side_bending", False),
-            is_extended=manual_mods.get("neck_extended", False),
+            is_extended=is_neck_extended,
         )
         
         sc_a, sc_b, sc_c, sc_d, grand, al = compute_rula_full(
@@ -1721,7 +1787,7 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             get_neck_score(neck_legacy,
                            is_twisted=manual_mods.get("neck_twisted", False),
                            is_side_bending=front_mods.get("is_neck_side_bending", False),
-                           is_extended=manual_mods.get("neck_extended", False)),
+                           is_extended=is_neck_extended),
             s_tk, lg_score, m_val, f_val
         )
         new_neck_rula = (compute_rula_full(
@@ -1729,7 +1795,7 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             get_neck_score(neck_v114["angle"],
                            is_twisted=manual_mods.get("neck_twisted", False),
                            is_side_bending=front_mods.get("is_neck_side_bending", False),
-                           is_extended=manual_mods.get("neck_extended", False)),
+                           is_extended=is_neck_extended),
             s_tk, lg_score, m_val, f_val
         ) if neck_v114["valid"] else None)
         # 同一影格相同的其他關節分數，只替換手腕「屈曲/伸展」部位分數做情境對照。
@@ -1829,9 +1895,9 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             f"{side_prefix}前臂向外側工作補正": "是 (+1分)" if front_mods.get("is_out_to_side") else "否（影像代理判斷）",
             "軀幹側彎補正": "是 (+1分)" if front_mods.get("is_side_bending") else "否（影像代理判斷）",
             "軀幹扭轉補正": "是 (+1分)" if manual_mods.get("trunk_twisted") else "否（人工確認）",
-            "軀幹向後伸展": "是（軀幹基礎分 2）" if manual_mods.get("trunk_extended") else "否（人工確認）",
+            "軀幹向後伸展": "是（軀幹基礎分 2）" if is_trunk_extended else "否",
             "頸部扭轉補正": "是 (+1分)" if manual_mods.get("neck_twisted") else "否（人工確認）",
-            "頸部後仰／伸展": "是（頸部基礎分 4）" if manual_mods.get("neck_extended") else "否（人工確認）",
+            "頸部後仰／伸展": "是（頸部基礎分 4）" if is_neck_extended else "否",
             "自動辨識設定": ", ".join(k for k, v in auto_selection.items() if v) or "未啟用",
             "正面鏡頭轉向提醒": bool(front_mods.get("front_rotation_warning", False)),
             "跨越中線標準化位移": front_mods.get("cross_midline_normalized", np.nan),
@@ -1839,6 +1905,13 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             "頸部側彎代理角度": front_mods.get("neck_lateral_angle_proxy", np.nan),
             "上臂後伸自動判定成功": auto_extension_used,
             "上臂後伸判定備註": auto_extension_warning,
+            "有向姿勢參考_面朝":directional["face_side"],
+            "有向姿勢參考_軀幹角度":directional["trunk_signed_deg"],
+            "有向姿勢參考_上臂角度":directional["upper_arm_signed_deg"],
+            "有向姿勢參考_頸部候選角度":directional["neck_proxy_deg"],
+            "有向姿勢參考_診斷":directional["diagnostic"],
+            "軀幹後伸自動判定":directional["trunk_extended"] if auto_selection.get("trunk_extended",True) else None,
+            "頸部後仰自動判定":directional["neck_extended"] if auto_selection.get("neck_extended",True) else None,
             f"{side_prefix}上臂分數": s_ua,
             f"{side_prefix}前臂分數": s_la,
             f"{side_prefix}手腕分數": s_wr,
@@ -2160,7 +2233,7 @@ def batch_recalculate_side(row, side, profile):
       'neck_twisted':'頸部扭轉補正','trunk_extended':'軀幹向後伸展',
       'neck_extended':'頸部後仰／伸展','arm_extended':pre+'上臂向後伸展補正'}
     for field,col in descriptions.items():
-        rec[col]='是（本張已確認）' if values[field] else '否（本張已確認）'
+        rec[col]='是' if values[field] else '否'
     rec[pre+'手腕扭轉']='接近旋轉極限(2分)' if wrist_twist==2 else '中間範圍(1分)'
     rec['足底支撐狀態']='受支撐且平衡' if legs==1 else '未受支撐／不平衡'
     return rec
@@ -2178,12 +2251,12 @@ def batch_effective_frames(side_frames, profiles, confirmed, neck_decisions=None
             key=(side,int(row['樣本編號']))
             p=batch_get_profile(row,side,profiles.get(key,{}))
             unknown=[BATCH_FIELDS[k] for k,v in p.items() if k in BATCH_FIELDS and v is None]
-            st=('待確認整張補正' if key not in confirmed else (
-                '無法確認：'+','.join(unknown) if unknown else '補正已確認'))
+            st=('無法確認：'+','.join(unknown) if unknown else
+                ('補正已人工確認' if key in confirmed else '採用分析前設定（候選）'))
             status[key]=st
             rec=batch_recalculate_side(row,side,p)
             rec['照片補正確認狀態']=st
-            rec['照片補正來源']='批次／單張人工確認' if key in confirmed else '分析前候選設定（未確認）'
+            rec['照片補正來源']='批次／單張人工確認' if key in confirmed else '分析前設定／逐張自動估測（候選）'
             records.append(rec)
         frame_map[side]=pd.DataFrame(records)
     if set(frame_map)>={'右手側','左手側'}:
@@ -2195,8 +2268,8 @@ def batch_effective_frames(side_frames, profiles, confirmed, neck_decisions=None
                 ri,li=right[sid],left[sid]
                 rr=r.loc[ri].to_dict();ll=l.loc[li].to_dict()
                 # Unknown conditions are not converted to false; leave these candidate rows pending.
-                if not (status[('右手側',sid)]=='補正已確認' and
-                        status[('左手側',sid)]=='補正已確認'):
+                if (status[('右手側',sid)].startswith('無法確認') or
+                    status[('左手側',sid)].startswith('無法確認')):
                     continue
                 # Pre-correction shared neck scores are already a shared value. To check
                 # *new* conditions per camera, calculate independent candidates above.
@@ -2247,8 +2320,8 @@ def batch_choose_none(side):
     st.session_state['batch_selected_'+side]=[]
 
 def batch_photo_panel():
-    st.subheader('照片批次補正｜先整批確認，再修改例外')
-    st.caption('以側面有效照片為單位操作；雙側同一編號仍分別確認各手臂，軀幹與頸部建議參照兩張同步影像。原始自動角度與候選分數不會被覆寫。若整批姿勢條件相同，可全選並確認一次；例外照片再修改。')
+    st.subheader('照片批次補正｜需要修改才使用')
+    st.caption('系統已依分析前設定與每張可用影像產生候選分數，不需要全選確認。只有負重／扭轉／支撐等條件在部分照片不同時，才多選照片修正；原始候選資料保留。')
     raw=batch_source_frames(st.session_state)
     sides=[s for s in ('右手側','左手側') if s in raw]
     if not sides:
@@ -2260,7 +2333,7 @@ def batch_photo_panel():
     confirmed=st.session_state.setdefault('batch_confirmed',set())
     profiles=st.session_state.setdefault('batch_profiles',{})
     done=sum((side,sid) in confirmed for sid in ids)
-    st.progress(done/max(1,len(ids)),text=f'{side}：已檢查 {done}／{len(ids)} 張；未確認者不列入可信評分')
+    st.caption(f'{side}：{len(ids)} 張已有分析候選值；另有 {done} 張做過人工補正／確認（非必要操作）。')
     count=st.selectbox('檢視照片',ids,key='batch_preview_id_'+side)
     images=(st.session_state.get('display_right_b64',[]) if side=='右手側' else
             st.session_state.get('display_left_b64',[])) if len(sides)==2 else st.session_state.get('display_images_b64',[])
@@ -2284,7 +2357,7 @@ def batch_photo_panel():
                  '目前設定':('無法判斷' if v is None else ('有' if v else '沒有') if isinstance(v,bool) else v)}
                  for k,v in cur.items() if k in BATCH_FIELDS])
         st.dataframe(preview,use_container_width=True,hide_index=True)
-        st.caption('來源可能是正面影像估測或分析前預設值；尚未人工確認的狀態不表示準確。')
+        st.caption('此為分析前預設值或影像推估候選；只有修改時需要人工操作。')
     selected_ids=st.multiselect('批次選取照片（可多選）',ids,default=[],key='batch_selected_'+side,
             help='例如全選 30 張確認一般條件，之後再選第 9～14 張修正扭轉或負重。')
     c1,c2=st.columns(2)
@@ -2297,7 +2370,7 @@ def batch_photo_panel():
     if selected_ids:
         st.caption(f'已選 {len(selected_ids)} 張：'+','.join(map(str,selected_ids[:25]))+('…' if len(selected_ids)>25 else ''))
     with st.form('batch_edit_form'):
-        st.markdown('**修改選中照片的補正**（「維持原設定」表示這次不更改；儲存前請目視核對）')
+        st.markdown('**只修改選中照片有變化的條件**（其餘維持原本的自動／初始設定）')
         changes={}
         groups=[('有正面時可用正面影像輔助的項目',BATCH_BOOL_FIELDS[:5]),
                 ('其他隨姿勢改變的補正',BATCH_BOOL_FIELDS[5:])]
@@ -2322,9 +2395,9 @@ def batch_photo_panel():
             val=nums[i].selectbox(label,options,key='batch_edit_'+key)
             changes[key]='keep' if val=='維持原設定' else None if val=='無法判斷' else int(val)
         st.caption('肌肉使用依整體作業重複頻率／靜態維持判斷；負重按實際施力階段調整。'
-                   '勾選「已確認」表示你已檢查所選照片中全部維持原設定的項目，不是 AI 保證正確。')
-        acknowledge=st.checkbox('我已核對選中照片的姿勢及作業條件，同意採用上述設定')
-        submit=st.form_submit_button('套用補正並確認選中照片',type='primary')
+                   '僅變更你有把握的條件；若無法判斷可選「無法判斷」，不會強制當作沒有。')
+        acknowledge=st.checkbox('我確認要把這些變更套用到所選照片')
+        submit=st.form_submit_button('套用所選修改',type='primary')
     if submit:
         if not selected_ids:
             st.error('請先選取至少一張照片。')
@@ -2437,10 +2510,12 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
             original=sampled[side].get(sid)
             status,grand,al=v113_record_status(sid,side,original,decisions,overrides,flagged_keys,notice_keys,legacy)
             batch_state = (batch_status or {}).get((side,sid),'補正已確認')
-            if batch_state != '補正已確認' and grand is not None and (side,sid) not in overrides:
-                status,grand,al='待照片補正確認（'+batch_state+'）',None,None
-            elif batch_state == '補正已確認' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
+            if batch_state.startswith('無法確認') and grand is not None and (side,sid) not in overrides:
+                status,grand,al='待釐清補正（'+batch_state+'）',None,None
+            elif batch_state == '補正已人工確認' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
                 status='照片補正已人工確認／品質篩檢通過'
+            elif batch_state == '採用分析前設定（候選）' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
+                status='使用預設設定的候選分數（未逐張人工確認）'
             if original is not None and neck_case is not None:
                 if neck_case['需要人工確認'] and neck_choice is None and grand is not None:
                     # 不讓使用者在別處「維持自動評分」繞過共同頸部分級的待確認狀態。
@@ -2460,7 +2535,7 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 '原始AL':(original.get('原始自動AL', original.get('右手 AL' if side=='右手側' else '左手 AL')) if original is not None else None),
                 '複核後Grand Score':grand, '複核後AL':al,
                 '結果狀態':status,'使用者選擇':decisions.get(v113_key(sid,side),'未額外指定'),
-                '是否納入可信統計':grand is not None,
+                '是否納入可信統計':grand is not None,  # 技術欄名沿用；畫面須明示含候選結果
                 '原始品質狀態':(original.get('品質狀態','') if original is not None else '無有效自動評分'),
                 '採用頸部分數':(int(neck_choice) if neck_choice is not None else (neck_case['選定共用頸部分數'] if neck_case and not neck_case['需要人工確認'] else None)),
                 '頸部確認狀態':('待人工確認' if neck_case and neck_case['需要人工確認'] and neck_choice is None else ('人工已確認' if neck_choice is not None else ('系統自動共用' if neck_case else '單側評估'))),
@@ -2642,7 +2717,7 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
                 sid=int(r['樣本編號']);state=(batch_status or {}).get((side,sid),'補正已確認')
                 detail={'樣本編號':sid,'評估側':side,'補正確認狀態':state,
                     '原始候選總分':r.get('原始自動Grand Score',r.get(pre+' Grand Score')),
-                    '補正後候選總分':r.get(pre+' Grand Score') if state=='補正已確認' else None}
+                    '補正後候選總分':r.get(pre+' Grand Score') if not state.startswith('無法確認') else None}
                 for field,col in [('上臂',pre+'上臂分數'),('前臂',pre+'前臂分數'),
                     ('手腕',pre+'手腕分數'),('腕扭轉',pre+'手腕扭轉分數'),
                     ('頸部','頸部分數'),('軀幹','軀幹分數'),('腿部','腿部分數'),
@@ -2702,7 +2777,7 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
         write_unique('閱讀指南.txt',(
             'RULA 分析報告使用說明\n\n'
             '原始分析/：未經照片批次補正的分析前候選結果，僅供驗證演算法。\n'
-            '複核後結果/：照片批次補正與品質／頸部覆核後的分數；未確認者留空不算可信分數。\n'
+            '複核後結果/：包含分析前設定的候選分數與人工補正後分數；品質／頸部待確認者留空。候選不代表人工已驗證。\n'
             '複核後結果/逐張人工補正確認.csv：每張照片最後採用的條件及人工修改欄位。\n'
             '時間同步/：各鏡頭時間校正與影格對應。\n'
             '照片：各樣本的原始影像和骨架圖。\n'
@@ -3327,7 +3402,8 @@ def user_report_reviewed(df, combined=False):
               '複核後AL','結果狀態','照片補正狀態','是否納入可信統計','使用者選擇']
     mapping={'原始Grand Score':'原始總分','複核後Grand Score':'複核後總分',
              '複核後AL':'複核後行動等級','完整雙側AL':'行動等級',
-             '完整雙側最高分':'雙側最高分'}
+             '完整雙側最高分':'雙側最高分',
+             '是否納入可信統計':'是否有可用候選分數'}
     return df[[c for c in cols if c in df.columns]].rename(columns=mapping).copy()
 
 
@@ -3552,7 +3628,9 @@ AUTO_FLAGS={
     'is_out_to_side':'前臂向外側工作（正面位置）',
     'is_side_bending':'軀幹側彎（肩髖中心線）',
     'is_neck_side_bending':'頸部側彎（頭頸相對軀幹）',
-    'upper_arm_extended':'上臂向後伸展（側面朝向判斷；實驗性）',
+    'upper_arm_extended':'上臂向後伸展（側面有向角度）',
+    'trunk_extended':'軀幹向後伸展（側面有向角度）',
+    'neck_extended':'頸部後仰（側面保守估測；不明確時人工設定）',
 }
 front_labels={
     'is_abducted':'上臂外展（+1）',
@@ -3562,11 +3640,17 @@ front_labels={
     'is_neck_side_bending':'頸部側彎（+1）',
 }
 for flag in AUTO_FLAGS:
-    v8_value('auto_'+flag,flag!='upper_arm_extended')
+    v8_value('auto_'+flag,True)
+# 升級舊版時只對新增／先前預設關閉的方向辨識做一次預設啟用。
+if not st.session_state.get('_directional_defaults_migrated'):
+    for _flag in ('upper_arm_extended','trunk_extended','neck_extended'):
+        st.session_state.v8_values['auto_'+_flag]=True
+        st.session_state['_v8_field_auto_'+_flag]=True
+    st.session_state['_directional_defaults_migrated']=True
 for flag in front_labels:
     for side in ('右手側','左手側'):
         v8_value('manual_'+side+'_'+flag,False)
-auto_selection={flag:v8_value('auto_'+flag,flag!='upper_arm_extended') for flag in AUTO_FLAGS}
+auto_selection={flag:v8_value('auto_'+flag,True) for flag in AUTO_FLAGS}
 manual_front={(side,flag):v8_value('manual_'+side+'_'+flag,False)
               for side in ('右手側','左手側') for flag in front_labels}
 
@@ -3744,8 +3828,8 @@ elif page == 1:
 elif page == 2:
     st.subheader('自動辨識條件')
     if factory_mode:
-        st.warning('本次沒有正面影片：上臂外展、前臂跨中線／向外、軀幹及頸部側彎無法依正面畫面自動判定。本頁僅設定候選值，分析後可在照片批次補正中心確認；無法判斷可標記未知，不會被當成「否」。')
-        st.caption('這五項自動補正已停用；本頁只設定分析候選值。分析後可整批選照片確認／修正，不需每張重做角度辨識。')
+        st.warning('沒有正面鏡頭：上臂外展、跨中線、軀幹及頸部側彎等先沿用此頁的人工預設；如果不同照片條件變化，分析後再批次修改。無法確認的情況請勿宣稱為純自動準確評分。')
+        st.caption('上述五項沒有正面影像時停用自動判斷；側面可估測的上臂／軀幹方向仍會逐張使用。')
     else:
         st.caption('勾選表示使用影像向量代理判斷；取消後會顯示右側／左側的手動勾選。')
     cols=st.columns(2)
@@ -3753,7 +3837,7 @@ elif page == 2:
         if factory_mode and flag in front_labels:
             continue
         with cols[i%2]:
-            auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,flag!='upper_arm_extended')
+            auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,True)
     if factory_mode:
         auto_selection.update({flag:False for flag in front_labels})
     with st.expander('無正面影片：人工確認補正' if factory_mode else '僅設定未自動判斷的項目',expanded=True):
@@ -3764,14 +3848,14 @@ elif page == 2:
                     manual_front[(side_name,flag)]=v8_widget('checkbox',side_label+'｜'+label,
                         'manual_'+side_name+'_'+flag,False)
     if factory_mode:
-        st.info('本頁的人工勾選只是分析時的初始候選值；正式補正會在結果的「照片批次補正」頁確認。沒有正面畫面時，未確認不代表沒有該補正。')
+        st.info('沒有正面影片時，相關補正預設採用此處設定，並在結果標記為候選；若部分照片條件不同，可選擇批次修改。')
     else:
         st.caption('影像估測值並不是臨床量測精度；正面鏡頭關鍵點不足時，啟用自動辨識的樣本會被略過。')
     st.caption('頸部會以同側耳朵、肩膀與髖部計算相對角度；關鍵點不足時使用備援方式並保留診斷紀錄。')
 
 elif page == 3:
     st.subheader('人工確認條件（必要項）')
-    st.caption('以下是整段的「初始候選值」，不是每張最後分數。分析後請至「照片批次補正」依作業階段確認及修改，未確認者不列入可信統計。')
+    st.caption('這些是各張照片的初始評分設定；能由影像判斷的項目優先使用自動估測，不可靠則沿用設定。分析後只有條件不同的照片才需要修改。')
     a,b,c=st.columns(3)
     with a:
         leg_support_choice=v8_widget('selectbox','腿足支撐／平衡','leg',LEG_OPTIONS[0],options=LEG_OPTIONS)
@@ -3844,7 +3928,7 @@ if page == 4:
     if not st.session_state.v9_confirmed:
         st.warning('先到「鏡頭時間同步」預覽畫面並確認，否則不會開始分析。')
     if factory_mode:
-        st.info('無正面影片：此處為暫定姿勢條件；分析後在照片批次補正分頁一次選多張確認或調整，不必每張重新量角。')
+        st.info('沒有正面影片：使用這裡設定作為候選分數；只有作業階段不同時再多選照片調整，不需逐張確認。')
     st.caption('執行後自動跳到結果總覽；原本的分析及 ZIP 報表功能皆保留。')
 
 # 執行分析按鈕
@@ -4659,7 +4743,7 @@ def v4_make_zip(original_zip, reviews, anomaly_frames):
 
 def v4_show_review_center():
     st.subheader("異常影格審核／逐張人工修正／風險時間軸")
-    st.caption('顯示照片批次補正後的候選分數；未確認的照片不可直接視為可信評分。骨架照片上的文字仍是分析前舊分數。')
+    st.caption('顯示系統自動計算與預設補正的候選分數；人工批次修改後會重新查表。骨架照片印字是分析當下候選值。')
     mode = st.session_state.analyzed_mode
     both = mode == "左右側同步計算"
     available, batch_status, _ = batch_current_effective(st.session_state)
@@ -4746,7 +4830,7 @@ def v4_show_review_center():
             st.info("目前沒有人工修正，原始分數維持不變。")
 
     if tool == '📈 覆核時間軸':
-        st.caption("以每張原始候選分數與補正後候選分數對照；未確認補正者仍不算可信樣本。")
+        st.caption("以原始候選分數與可選的人工補正後分數對照；未經人工複核不代表已驗證準確。")
         side = st.selectbox("時間軸評估側", list(available), key="v4_chart_side")
         series = available[side].sort_values("時間(秒)").copy()
         prefix = "右手" if side == "右手側" else "左手"
@@ -4814,9 +4898,11 @@ if st.session_state.v9_screen == 'results':
         if pending_neck:
             st.warning(f'有 {len(pending_neck)} 筆頸部姿勢可能改變風險行動等級，尚未確認。請至「角度檢視 → 頸部」只確認頸部分數。未確認者不列入可信統計。')
         _,batch_states,_=batch_current_effective(st.session_state)
-        batch_pending=sum(x!='補正已確認' for x in batch_states.values())
-        if batch_pending:
-            st.warning(f'尚有 {batch_pending} 張側別照片未確認姿勢／負荷補正。請至「照片批次補正」使用全選或多選快速確認；這些照片目前僅有候選分數。')
+        batch_unknown=sum(x.startswith('無法確認') for x in batch_states.values())
+        if batch_unknown:
+            st.warning(f'有 {batch_unknown} 張照片的補正被標記為「無法確認」；這些照片暫不列入可用候選統計。')
+        else:
+            st.info('自動分析與初始人工設定已產生候選結果；照片批次補正為選用工具，不必逐張勾選。')
         (tab_overview, tab_batch, tab_review, tab_rejected, tab_angles,
          tab_gallery, tab_reports, tab_download) = st.tabs([
             '📈 風險總覽', '✅ 照片批次補正', '🔎 異常／人工覆核', '🧩 剔除樣本',
@@ -4832,7 +4918,7 @@ if st.session_state.v9_screen == 'results':
                         st.dataframe(st.session_state.v9_sync_summary,use_container_width=True,hide_index=True)
                 reviewed, reviewed_combined=v113_current_reports()
                 if (df_show is None or df_show.empty) and reviewed_combined.empty:
-                    st.warning('尚無可信分析結果；可到「剔除樣本」對失敗影格人工評分後再查看。')
+                    st.warning('目前尚無可用候選結果；可到「剔除樣本」查看品質或辨識失敗原因。')
                 else:
                     if mode_now=='左右側同步計算':
                         if reviewed_combined.empty:
@@ -4840,7 +4926,7 @@ if st.session_state.v9_screen == 'results':
                         else:
                             full=reviewed_combined[reviewed_combined['雙側結果狀態']=='完整雙側有效']
                             effective=pd.to_numeric(full['完整雙側最高分'],errors='coerce').dropna()
-                        st.metric('完整雙側可用樣本',len(effective))
+                        st.metric('完整雙側可用候選',len(effective))
                         left_ok=int(((reviewed['評估側']=='左手側') & (reviewed['是否納入可信統計'])).sum()) if not reviewed.empty else 0
                         right_ok=int(((reviewed['評估側']=='右手側') & (reviewed['是否納入可信統計'])).sum()) if not reviewed.empty else 0
                         st.caption(f'側別可用：右側 {right_ok} 筆、左側 {left_ok} 筆。若僅單側可用，完整雙側最高分留空，但該側原始資料與複核結果保留。')
@@ -4848,7 +4934,7 @@ if st.session_state.v9_screen == 'results':
                         reviewed_ok=reviewed[reviewed['是否納入可信統計']] if not reviewed.empty else pd.DataFrame()
                         effective=pd.to_numeric(reviewed_ok['複核後Grand Score'],errors='coerce').dropna() if not reviewed_ok.empty else pd.Series(dtype='float64')
                     a,b,c=st.columns(3)
-                    a.metric('可信總分樣本',len(effective))
+                    a.metric('可用候選分數',len(effective))
                     b.metric('平均 Grand Score',f'{effective.mean():.2f}' if not effective.empty else '—')
                     c.metric('AL3／AL4 比例',f'{effective.ge(5).mean()*100:.1f}%' if not effective.empty else '—')
                     if not effective.empty:
@@ -4861,8 +4947,8 @@ if st.session_state.v9_screen == 'results':
                     elif not reviewed.empty:
                         st.line_chart(reviewed[reviewed['是否納入可信統計']].set_index('樣本編號')[['複核後Grand Score']],y_label='RULA Grand Score')
                     else:
-                        st.warning('目前尚無可用的可信評分。')
-                    st.caption('此處只統計批次補正已確認、品質通過且頸部分級必要確認已完成的照片；原始角度和候選評分保留。')
+                        st.warning('目前尚無可用的候選評分。')
+                    st.caption('這裡是可用候選評分的描述性統計，可能包含未逐張人工確認的補正；若品質或頸部分級仍待必要複核會排除。')
                     st.caption('平均數僅作描述性統計，不能取代 RULA 對高風險姿勢的判斷。')
                 st.info('時間欄位說明：「共同時間」以同步事件為 0 秒；「分析經過時間」從取樣開始算 0 秒。若無正面影片，正面視角相關補正由使用者人工確認。')
         if tab_batch.open:
@@ -4964,7 +5050,7 @@ if st.session_state.v9_screen == 'results':
                             st.session_state.get('batch_profiles',{}),st.session_state.get('batch_confirmed',set())))
                     render_blob_download_button(finalized,st.session_state.zip_filename,
                                                 f'📥 下載 {mode_now} 原始＋複核後報表 ZIP')
-                st.caption('ZIP 的「原始分析」保留初始候選分數；「複核後結果」有逐張補正、確認狀態與可信評分。未確認照片不應用來宣稱系統準確率。')
+                st.caption('ZIP 的「原始分析」保留最初候選；「複核後結果」包含沿用設定的候選及人工修正結果，並標明來源。未經人工驗證不應稱為準確率。')
 # 只有分析前六步才顯示底部「上一步／下一步」；結果頁使用分頁，不再有步驟按鈕。
 if st.session_state.v9_screen == 'setup':
     st.divider()

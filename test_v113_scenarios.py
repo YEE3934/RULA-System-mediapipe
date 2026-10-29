@@ -57,6 +57,6 @@ with zipfile.ZipFile(io.BytesIO(final)) as z:
  combo=pd.read_csv(io.BytesIO(z.read('複核後結果/雙側結果.csv')))
  assert pd.isna(combo.query('樣本編號==1').iloc[0]['雙側最高分'])
  assert combo.query('樣本編號==2').iloc[0]['雙側最高分']==4
-assert 'RULA_FINAL_BATCH_REVIEW_2026-10-29' in source
+assert 'RULA_DIRECTIONAL_DEFAULTS_2026-10-30' in source
 assert source.index('def v113_build_reviewed_data') < source.index('if st.session_state.v9_screen == \'results\':')
 print('Passed: 12 targeted review/report/ZIP scenarios')
