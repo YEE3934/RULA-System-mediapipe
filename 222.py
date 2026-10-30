@@ -603,12 +603,18 @@ def v11_update_qc(data, snap, side, side_cap=None, side_frame_idx=None, side_fps
         cur=qc.get('品質最低可見度',np.nan)
         qc.update(v11_cross_view_hint(other_frame,pose_model,side,float(cur) if np.isfinite(cur) else 0.0))
     v11_1_neck_crosscheck(qc,data,neck_peer)
-    # 前臂「待複核」可能影響總分；列入正式複核中心（不同於一般軟品質提醒）。
+    # 不確定 ≠ 必須逐張人工：先用原 RULA Table 測試外側工作有/無是否改變總分。
     if data.get('外側工作判定狀態') == '待複核':
-        qc['品質狀態'] = '需人工複核'
-        qc['品質原因'] = str(qc.get('品質原因', '')) + '；前臂向外側工作尚不能判定，需確認 +1'
-        qc['品質嫌疑關節'] = ','.join(sorted(set(filter(None,
-            str(qc.get('品質嫌疑關節', '')).split(',') + ['el', 'wr']))))
+        impact=rula_outside_score_sensitivity(data,side)
+        data['外側工作分數敏感度']=impact['note']
+        if impact['same_grand']:
+            qc['品質原因']=str(qc.get('品質原因',''))+'；前臂向外工作不確定，但兩情境 Grand Score 相同（保留診斷、不強制逐張確認）'
+            if qc['品質狀態']=='通過':qc['品質狀態']='留意'
+        else:
+            qc['品質狀態'] = '需人工複核'
+            qc['品質原因'] = str(qc.get('品質原因', '')) + '；前臂向外側工作不確定：'+impact['note']
+            qc['品質嫌疑關節'] = ','.join(sorted(set(filter(None,
+                str(qc.get('品質嫌疑關節', '')).split(',') + ['el', 'wr']))))
     qc['品質可直接採信']=(qc['品質狀態']!='需人工複核')
     qc['品質是否列入複核中心']=(qc['品質狀態']=='需人工複核' or
                         (policy.startswith('審慎') and qc['品質狀態']=='留意'))
@@ -636,11 +642,18 @@ def v11_front_fallback_note(qc, data, front_ok, auto_settings):
     # 「全段未上傳 Front」則依使用者事先作業設定，不使每一張自動排入複核中心。
     if (bool(auto_settings.get('is_out_to_side', False)) and
         data.get('外側工作判定狀態') == '人工設定（正面不可用）'):
-        qc['品質狀態'] = '需人工複核'
-        qc['品質可直接採信'] = False
-        qc['品質是否列入複核中心'] = True
-        qc['品質原因'] += '；此張 Front 視角不可靠，前臂外側工作 +1 尚未確認'
-        qc['品質計分說明'] = '前臂向外側工作沿用暫算值；需局部人工複核後才能採信'
+        impact=rula_outside_score_sensitivity(data, '右手側' if '右手上臂分數' in data else '左手側')
+        data['外側工作分數敏感度']=impact['note']
+        if impact['same_grand']:
+            qc['品質原因'] += '；此張 Front 無法估算前臂外側工作，但不影響 RULA Grand Score，僅保留診斷'
+            qc['品質計分說明'] = ('前臂向外側工作仍未確認；有／無兩情境的 RULA 總分相同。'
+                              '若另有骨架或頸部品質問題仍須複核。')
+        else:
+            qc['品質狀態'] = '需人工複核'
+            qc['品質可直接採信'] = False
+            qc['品質是否列入複核中心'] = True
+            qc['品質原因'] += '；此張 Front 視角不可靠，外側工作補正可能影響分數：'+impact['note']
+            qc['品質計分說明'] = '前臂向外側工作沿用暫算值；需局部人工複核後才能採信'
     data.update(qc)
     return qc
 
@@ -1175,6 +1188,45 @@ def compute_rula_full(ua, la, w, wt, nk, tk, lg, m_val, f_val):
     grand_score = TABLE_C[min(max(score_c, 1), 9) - 1][min(max(score_d, 1), 9) - 1]
     al_num = 1 if grand_score <= 2 else (2 if grand_score <= 4 else (3 if grand_score <= 6 else 4))
     return score_a, score_b, score_c, score_d, grand_score, f"AL{al_num}"
+
+
+# ===== 對不確定的前臂外側工作，先測試「有／無 +1」是否實際改變 RULA 分數 =====
+def rula_outside_score_sensitivity(row, side, profile=None):
+    """在不猜測姿勢真值下，測試 RULA 有／無外側工作補正的兩種結果。
+
+    若兩種情境的 Grand Score 完全相同，該姿勢條件仍未知，但當次總分
+    不因它而變；不需要為此單一未知條件強制人工逐張審核。
+    注意：這不能代替人體姿勢正確率驗證，其他品質或頸部疑慮仍照常複核。
+    """
+    pre='右手' if side=='右手側' else '左手'
+    try:
+        candidates=[]
+        for value in (False, True):
+            if profile is not None:
+                scenario=dict(profile)
+                scenario['out_side']=value
+                out=batch_recalculate_side(row, side, scenario)
+                result=(int(out[pre+' Grand Score']),str(out[pre+' AL']))
+            else:
+                across=str(row.get(pre+'橫越中線補正','否')).startswith('是')
+                la=get_lower_arm_score(float(row[pre+'前臂角度']),across,value)
+                out=compute_rula_full(
+                    int(row[pre+'上臂分數']), la,
+                    int(row[pre+'手腕分數']),int(row[pre+'手腕扭轉分數']),
+                    int(row['頸部分數']),int(row['軀幹分數']),
+                    int(row['腿部分數']),int(row['肌肉使用加分']),
+                    int(row['負重施力加分']))
+                result=(int(out[4]),str(out[5]))
+            candidates.append(result)
+        same_grand=(candidates[0][0]==candidates[1][0])
+        same_level=(candidates[0][1]==candidates[1][1])
+        return {'known':True,'same_grand':same_grand,'same_level':same_level,
+                'no_outside':candidates[0], 'yes_outside':candidates[1],
+                'note':('有／無外側工作補正的 RULA 總分完全相同' if same_grand else
+                        ('總分不同、行動等級相同' if same_level else '行動等級會改變'))}
+    except (ValueError,TypeError,KeyError,OverflowError,IndexError) as exc:
+        return {'known':False,'same_grand':False,'same_level':False,
+                'note':'無法評估外側補正分數敏感度：'+str(exc)}
 
 
 # ===== 結案版：同一時間點共用頸部分數，只有可能改變行動等級才局部複核 =====
@@ -2601,10 +2653,26 @@ def batch_effective_frames(side_frames, profiles, confirmed, neck_decisions=None
             key=(side,int(row['樣本編號']))
             p=batch_get_profile(row,side,profiles.get(key,{}))
             unknown=[BATCH_FIELDS[k] for k,v in p.items() if k in BATCH_FIELDS and v is None]
-            st=('無法確認：'+','.join(unknown) if unknown else
-                ('補正已人工確認' if key in confirmed else '採用分析前設定（尚未額外人工修改）'))
+            # 只對唯一的外側工作未知進行敏感度判定；其餘未知仍須人工確認。
+            only_outside_unknown=(p.get('out_side') is None and
+                not any(v is None for k,v in p.items() if k!='out_side'))
+            impact=(rula_outside_score_sensitivity(row,side,p) if only_outside_unknown else None)
+            insensitive=bool(impact and impact['same_grand'])
+            if insensitive:
+                st='外側工作條件待辨識（有／無補正總分相同；無需逐張確認）'
+                # 重算可能包含其他人工修改；沿用初始的外側工作候選設定只為計算，
+                # 不將其陳述為影像辨識真值。兩種情境的 Grand Score 已驗證相同。
+                pre='右手' if side=='右手側' else '左手'
+                calculation_profile=dict(p)
+                calculation_profile['out_side']=str(row.get(pre+'前臂向外側工作補正','否')).startswith('是')
+                rec=batch_recalculate_side(row,side,calculation_profile)
+                rec[pre+'前臂向外側工作補正']=row.get(pre+'前臂向外側工作補正','待辨識')
+                rec['外側工作分數敏感度']='有／無 +1 皆為 RULA '+str(impact['no_outside'][0])
+            else:
+                st=('無法確認：'+','.join(unknown) if unknown else
+                    ('補正已人工確認' if key in confirmed else '採用分析前設定（尚未額外人工修改）'))
+                rec=batch_recalculate_side(row,side,p)
             status[key]=st
-            rec=batch_recalculate_side(row,side,p)
             # 第二階段的單張／批次修改會覆蓋影片時段值；報表須清楚顯示最終來源。
             edited=profiles.get(key,{})
             if any(field in edited for field in ('muscle','force')):
@@ -2717,8 +2785,13 @@ def batch_photo_panel():
                  for k,v in cur.items() if k in BATCH_FIELDS])
         st.dataframe(preview,use_container_width=True,hide_index=True)
         st.caption('目前顯示影片時段設定、初始作業條件及自動辨識結果；沒有不同就不必修改。')
-    if batch_get_profile(current_row,side,profiles.get((side,int(count)),{})).get('out_side') is None:
-        st.warning('這張照片的「前臂向外側工作」為待確認；請在下方「上肢」補正將它明確設為有／沒有並套用。未確認前不會列入正式有效結果。')
+    preview_profile=batch_get_profile(current_row,side,profiles.get((side,int(count)),{}))
+    if preview_profile.get('out_side') is None:
+        impact=rula_outside_score_sensitivity(current_row,side,preview_profile)
+        if impact['same_grand']:
+            st.info('這張的前臂外側工作仍無法從影像確定，但有／無 +1 都不會改變 RULA 總分，無須為此逐張補正；可選擇抽查。')
+        else:
+            st.warning('這張的前臂外側工作可能影響 RULA 分數，請在「上肢」補正為有／沒有並套用。'+impact['note'])
     selected_ids=st.multiselect('批次選取照片（可多選）',ids,default=[],key='batch_selected_'+side,
             help='只需要選擇與初始條件不同的照片；其他照片不用操作。')
     c1,c2=st.columns(2)
@@ -3325,7 +3398,11 @@ def v8_show_rejected_center():
     if selected==V113_KEEP:
         _profile=batch_get_profile(original,side,st.session_state.get('batch_profiles',{}).get((side,sid),{})) if original is not None else {}
         if _profile.get('out_side','not_present') is None:
-            st.warning('前臂向外側工作尚未能辨識：這裡選「維持自動評分」仍不會使暫算分數成為正式有效結果。請到「照片批次修改」把本張外側工作選成「有」或「沒有」，或使用人工重新評分。')
+            impact=rula_outside_score_sensitivity(original,side,_profile)
+            if impact['same_grand']:
+                st.info('前臂向外側工作仍未辨識確定，但有／無補正不改變這筆 RULA 總分；不需為此項單獨人工補正。其他品質疑慮照常處理。')
+            else:
+                st.warning('前臂向外側工作尚未能辨識，且可能改變 RULA 分數。請到照片批次修改明確設為有／沒有，或人工重新評分。')
         else:
             st.success('此筆採用自動計算及已儲存的人工補正；仍須確認其他品質疑慮。')
     elif selected==V113_EXCLUDE:
@@ -5482,7 +5559,7 @@ if st.session_state.v9_screen == 'results':
         _,batch_states,_=batch_current_effective(st.session_state)
         batch_unknown=sum(x.startswith('無法確認') for x in batch_states.values())
         if batch_unknown:
-            st.warning(f'有 {batch_unknown} 張照片的補正被標記為「無法確認」；這些照片暫不列入風險統計。')
+            st.warning(f'有 {batch_unknown} 筆側別的補正可能影響 RULA 總分，尚待確認；其餘外側工作不確定但總分不變者保留紀錄、不需逐張確認。')
         else:
             st.info('已依影片時段、影像辨識和預設作業條件產生 RULA 評分；僅在條件不同時才需批次修改。')
         (tab_overview, tab_batch, tab_review, tab_rejected, tab_angles,
