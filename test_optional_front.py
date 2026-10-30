@@ -77,7 +77,7 @@ for fragment in [
     "'has_front_view':not is_factory_mode",
     "'評估結果/無正面人工補正確認.csv'",
     "正面鏡頭（選填，建議上傳）",
-    "RULA_VIDEO_TIMELINE_AUTO_2026-10-30",
+    "RULA_INTERACTIVE_VIDEO_TIMELINE_2026-10-30",
 ]:
     assert fragment in source, fragment
 assert '正面鏡頭（必要）' not in source

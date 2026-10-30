@@ -53,7 +53,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
 # which is typically read-only on hosted deployments.
 POSE_MODEL_COMPLEXITY = 1
-APP_BUILD_TAG = "RULA_VIDEO_TIMELINE_AUTO_2026-10-30"
+APP_BUILD_TAG = "RULA_INTERACTIVE_VIDEO_TIMELINE_2026-10-30"
 
 # ==================== 【沿用 v6 RULA 查表矩陣：仍需標準工作表逐格核對】 ====================
 TABLE_A = {
@@ -2124,8 +2124,8 @@ def rula_timeline_rules(values, duration=None):
         return []
     try:
         count=int(values.get('timeline_count',1))
-        if not 1<=count<=8:
-            raise ValueError('時段數量必須介於 1～8 組')
+        if not 1<=count<=24:
+            raise ValueError('時段數量必須介於 1～24 組')
         rules=[]
         for i in range(count):
             start=float(values.get(f'timeline_{i}_start',0.0))
@@ -2164,6 +2164,149 @@ def rula_timeline_video_fields(video_second, rules, default_muscle, default_forc
     m,f,source=rula_timeline_at(video_second,rules,default_muscle,default_force)
     return {'參考側影片時間(秒)':round(float(video_second),3),'作業條件設定來源':source,
             '肌肉使用加分':m,'負重施力加分':f}
+
+# =============== 影片時間軸：雙端點拖曳＋多區間，自訂互動元件 ===============
+# 採用 Streamlit Components v1 的雙向通訊（純 HTML/JS，無 CDN 或額外 pip 套件）。
+# 上傳影片內容僅在使用者工作階段傳給瀏覽器，不寫入公開靜態資料夾。
+_TIMELINE_COMPONENT = None
+_TIMELINE_MAX_VIDEO_BYTES = 24 * 1024 * 1024
+
+
+def rula_interactive_timeline_component():
+    global _TIMELINE_COMPONENT
+    if _TIMELINE_COMPONENT is None:
+        component_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'timeline_component')
+        if not os.path.isfile(os.path.join(component_dir, 'index.html')):
+            raise FileNotFoundError('找不到 timeline_component/index.html，請部署完整 ZIP，而非只上傳 222.py。')
+        _TIMELINE_COMPONENT = components.declare_component('rula_drag_timeline_20261030', path=component_dir)
+    return _TIMELINE_COMPONENT
+
+
+@st.cache_data(show_spinner=False, max_entries=6, ttl=3600)
+def rula_timeline_thumbnails(data, n=12):
+    """縮圖一次讀取，避免每次 Streamlit rerun 都重做影片分析。"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
+        tmp.write(data)
+        path = tmp.name
+    try:
+        cap = cv2.VideoCapture(path)
+        thumbs = []
+        try:
+            if not cap.isOpened():
+                return []
+            cnt = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if cnt < 1:
+                return []
+            for i in range(n):
+                index = int(round((i + 0.5) * (cnt - 1) / n))
+                cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+                ok, frame = cap.read()
+                if not ok:
+                    thumbs.append('')
+                    continue
+                h, w = frame.shape[:2]
+                sw = min(w, 200)
+                if w > sw:
+                    frame = cv2.resize(frame, (sw, max(1,int(h*sw/w))))
+                ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 57])
+                thumbs.append(base64.b64encode(encoded.tobytes()).decode('ascii') if ok else '')
+            return thumbs
+        finally:
+            cap.release()
+    finally:
+        os.unlink(path)
+
+
+def rula_timeline_segments_from_values(values):
+    """從原有時段欄位讀取，讓舊版設定仍能出現在新版拖曳介面。"""
+    if not values.get('timeline_enabled', False):
+        return []
+    segments = []
+    for i in range(max(0, min(24, int(values.get('timeline_count', 0))))):
+        segments.append({
+            'title': str(values.get(f'timeline_{i}_title', f'時段{i+1}')),
+            'start': float(values.get(f'timeline_{i}_start', 0)),
+            'end': float(values.get(f'timeline_{i}_end', 0)),
+            'muscle': int(values.get(f'timeline_{i}_muscle', 0)),
+            'force': int(values.get(f'timeline_{i}_force', 0)),
+        })
+    return segments
+
+
+def rula_timeline_apply_interactive(values, segments, duration):
+    """先驗證再修改 session 資料；不允許不完整時段覆蓋先前有效設定。"""
+    if not isinstance(segments, list) or len(segments) > 24:
+        raise ValueError('時段應是最多 24 組的清單')
+    cleaned = []
+    for i, x in enumerate(segments):
+        if not isinstance(x, dict):
+            raise ValueError(f'第 {i+1} 組不是有效的時段')
+        title = str(x.get('title', x.get('name', f'時段{i+1}'))).strip()[:48]
+        a, b = float(x['start']), float(x['end'])
+        m, f = int(x['muscle']), int(x['force'])
+        if not (np.isfinite(a) and np.isfinite(b)) or a<0 or b-a<0.099:
+            raise ValueError(f'第 {i+1} 組的開始或結束秒數不正確')
+        cleaned.append({'title': title or f'時段{i+1}', 'start': a, 'end': b, 'muscle': m, 'force': f})
+    # 使用既有計分函式完整驗證，包括影片長度、分數、重疊與秒數邊界。
+    check = {'timeline_enabled': bool(cleaned), 'timeline_count': len(cleaned)}
+    for i, x in enumerate(cleaned):
+        for field in ('title', 'start', 'end', 'muscle', 'force'):
+            check[f'timeline_{i}_{field}'] = x[field]
+    if cleaned:
+        rula_timeline_rules(check, duration)
+    # 驗證成功後才一次提交。
+    values.update(check)
+    return rula_timeline_segments_from_values(values)
+
+
+def rula_timeline_editor(uploaded, duration, values, camera_name):
+    """影像可播時使用內嵌播放器；大影片使用 st.video，縮圖時間軸仍可調整。"""
+    import hashlib
+    data = uploaded.getvalue()
+    signature = f'{camera_name}:'+hashlib.sha256(data).hexdigest()+f':{duration:.3f}'
+    # 更換影片時不繼承另一支影片的時段（清空邏輯也由 uploader callback 執行）。
+    if values.get('timeline_video_signature') not in (None, signature):
+        values['timeline_enabled'] = False
+        values['timeline_count'] = 0
+    values['timeline_video_signature'] = signature
+    segments = rula_timeline_segments_from_values(values)
+    try:
+        thumbs = rula_timeline_thumbnails(data, 12)
+    except Exception:
+        thumbs = []
+    video_name = str(getattr(uploaded, 'name', 'video.mp4')).lower()
+    playable_inline = (video_name.endswith(('.mp4','.m4v')) and len(data) <= _TIMELINE_MAX_VIDEO_BYTES)
+    video_b64 = base64.b64encode(data).decode('ascii') if playable_inline else ''
+    if not playable_inline:
+        st.caption('此影片格式或檔案大小不適合直接嵌入拖曳元件：先用下方影片播放器觀看，縮圖時間軸仍可建立多個區間。')
+        st.video(uploaded)
+    result = rula_interactive_timeline_component()(
+        duration=float(duration),
+        segments=segments,
+        thumbs=thumbs,
+        signature=signature,
+        video_b64=video_b64,
+        mime='video/mp4',
+        key='rula_video_timeline_editor',
+        default=None,
+    )
+    # 元件只在明確按「儲存全部區間」後回傳，不會拖一半就改寫正式分數。
+    if isinstance(result, dict) and result.get('signature') == signature:
+        revision = result.get('revision')
+        if revision != st.session_state.get('timeline_last_saved_revision'):
+            try:
+                new_segments = rula_timeline_apply_interactive(values, result.get('segments'), duration)
+                st.session_state['timeline_last_saved_revision'] = revision
+                st.success(f'已儲存 {len(new_segments)} 組影片時段；分析時會依照片對應的影片秒數自動套用。')
+            except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                st.error('時段尚未儲存：' + str(exc))
+    if segments or values.get('timeline_enabled'):
+        try:
+            rules = rula_timeline_rules(values, duration)
+            st.caption(f'目前已儲存 {len(rules)} 組區間；沒有被區間覆蓋的照片會使用上方預設肌肉使用／負重分數。')
+        except ValueError as exc:
+            st.warning('已儲存的時段需要重新確認：' + str(exc))
+
 
 # ==================== 最終驗證版：照片級補正與批次確認（不重跑 MediaPipe） ====================
 # 原始 DataFrame 只讀；人工勾選僅寫進獨立覆核資料，不覆寫角度或原始系統評分。
@@ -3688,6 +3831,11 @@ def v8_widget(fun, label, name, default, **kwargs):
 
 def v8_upload_on_change(name):
     st.session_state.v8_uploads[name]=st.session_state.get('_v8_uploader_'+name)
+    if name in ('left', 'right'):
+        st.session_state.v8_values['timeline_enabled']=False
+        st.session_state.v8_values['timeline_count']=0
+        st.session_state.v8_values.pop('timeline_video_signature',None)
+        st.session_state.pop('timeline_last_saved_revision',None)
     cam={'front':'Front','right':'Right','left':'Left'}.get(name)
     if cam:
         st.session_state.v8_values['sync_'+cam]=0.0
@@ -3709,6 +3857,11 @@ def v8_upload(label, name):
         st.caption('已暫存：'+str(saved.name)+'（切換步驟不會清除）')
         if st.button('清除這支影片',key='v8_clear_'+name):
             st.session_state.v8_uploads[name]=None
+            if name in ('left', 'right'):
+                st.session_state.v8_values['timeline_enabled']=False
+                st.session_state.v8_values['timeline_count']=0
+                st.session_state.v8_values.pop('timeline_video_signature',None)
+                st.session_state.pop('timeline_last_saved_revision',None)
             cam={'front':'Front','right':'Right','left':'Left'}.get(name)
             if cam:
                 st.session_state.v8_values['sync_'+cam]=0.0
@@ -3883,50 +4036,26 @@ if page == 0:
     with e: combo_muscle=v8_widget('selectbox','肌肉使用預設分數','muscle',MUSCLE_OPTIONS[0],options=MUSCLE_OPTIONS)
     with f: combo_force=v8_widget('selectbox','負重／施力預設分數','force',FORCE_OPTIONS[0],options=FORCE_OPTIONS)
     # 影片時段以必填的「右側／左側原始影片秒數」為準，不使用相對同步秒數。
-    with st.expander('🕒 依影片時段指定負重與肌肉使用（搬運作業建議設定）',expanded=False):
-        st.caption('例如右側影片第 4～12 秒正在搬重物，指定這段的負重／施力分數。'
-                   '未指定的秒數使用上方預設；左右側同步時會自動對到同一動作。'
-                   '肌肉使用須依整體作業的靜態／重複頻率判斷，不是看到單張肌肉用力就加 1。')
-        timeline_enabled=v8_widget('checkbox','啟用影片時段設定','timeline_enabled',False)
+    with st.expander('🎬 影片時間軸｜拖曳區間設定負重與肌肉使用', expanded=False):
+        st.caption('直接在影片縮圖時間軸選取兩端點，也能新增多組時段、拖曳起點／終點。'
+                   '每段分別設定肌肉使用和負重；其餘秒數沿用上方預設。'
+                   '確認後按「儲存全部區間並套用」。')
+        st.caption('肌肉使用 +1 必須根據靜態姿勢持續超過一分鐘或每分鐘重複超過四次等作業資訊判斷，'
+                   '不是只看一張照片有沒有出力。')
         ref_side_cam='Right' if '右手側' in selected_sides else 'Left'
         ref_file=vid_right_file if ref_side_cam=='Right' else vid_left_file
         ref_title='右側' if ref_side_cam=='Right' else '左側'
-        ref_duration=None
-        if ref_file is not None:
+        if ref_file is None:
+            st.info(f'請先上傳{ref_title}影片，才能使用拖曳時間軸。')
+        else:
             try:
                 ref_duration=float(v9_video_metadata_from_bytes(ref_file.getvalue())['duration'])
-                st.caption(f'時間基準：{ref_title}原始影片，長度約 {ref_duration:.2f} 秒。請填它播放時顯示的秒數。')
-            except Exception as exc:
-                st.warning('暫時無法讀取側面影片長度；啟動分析時仍會檢查時間範圍。')
-        else:
-            st.info(f'請先上傳{ref_title}影片，再設定時間區間。')
-        if timeline_enabled:
-            timeline_count=v8_widget('number_input','需要設定幾個不同的作業時段','timeline_count',1,
-                                     min_value=1,max_value=8,step=1)
-            for ti in range(int(timeline_count)):
-                st.markdown(f'**時段 {ti+1}**')
-                cols=st.columns([1.5,1,1,1.5,1.5])
-                with cols[0]:
-                    v8_widget('text_input','名稱',f'timeline_{ti}_title',f'時段{ti+1}')
-                with cols[1]:
-                    v8_widget('number_input','開始（秒）',f'timeline_{ti}_start',0.0,
-                              min_value=0.0,step=0.5,format='%.2f')
-                with cols[2]:
-                    v8_widget('number_input','結束（秒）',f'timeline_{ti}_end',5.0 if ti==0 else 0.0,
-                              min_value=0.0,step=0.5,format='%.2f')
-                with cols[3]:
-                    v8_widget('selectbox','肌肉使用',f'timeline_{ti}_muscle',0,
-                              options=[0,1],format_func=lambda x:f'{x} 分')
-                with cols[4]:
-                    v8_widget('selectbox','負重／施力',f'timeline_{ti}_force',0,
-                              options=[0,1,2,3],format_func=lambda x:f'{x} 分')
-            try:
-                rula_timeline_rules(st.session_state.v8_values,ref_duration)
-                st.success('時段設定格式正確；可在其他設定完成後啟動分析。')
-            except ValueError as exc:
-                st.warning('時段尚未完成：'+str(exc))
-            st.caption('同一張只採用一組時段設定；區間不可重疊。時段以「開始含、結束不含」計算。'
-                       '如要只修改個別照片，分析後仍可使用照片批次補正。')
+                st.caption(f'時間基準：{ref_title}原始影片（約 {ref_duration:.2f} 秒）。'
+                           '雙側影片沿用原本的同步設定，只需要設定一次。')
+                rula_timeline_editor(ref_file, ref_duration, st.session_state.v8_values, ref_side_cam)
+            except (ValueError, OSError, FileNotFoundError) as exc:
+                st.error('影片時間軸載入失敗：'+str(exc))
+        st.caption('分析後若只有少數照片的條件不同，仍可使用「照片批次修改」，不必重跑影片。')
     with st.expander('骨架品質與遮擋篩檢（選用，預設保守）', expanded=False):
         v11_qc_policy=v8_widget('selectbox','複核警示敏感度','v11_qc_policy',V11_QC_MODES[0],options=V11_QC_MODES)
         st.caption('只列嚴重疑慮是預設；頭頸與手臂可能重疊時先做幾何及前後影格檢查，仍不可靠才送人工複核。這是品質風險篩檢，不能證明關節實際位置。')
