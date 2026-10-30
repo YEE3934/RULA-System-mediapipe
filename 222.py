@@ -59,7 +59,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
 # which is typically read-only on hosted deployments.
 POSE_MODEL_COMPLEXITY = 1
-APP_BUILD_TAG = "RULA_OUTSIDE_WORK_DUAL_REFERENCE_PENDINGSAFE_2026-10-30"
+APP_BUILD_TAG = "RULA_FINAL_REVIEW_FLOW_CLEAR_2026-10-30"
 
 # RULA 1993/2016 標準工作表 (使用者提供論文 表3-8, 表3-9, 表3-10)
 # 三個互相獨立的矩陣，在 tests/test_independent_rula_tables.py 逐格比對固定人工轉錄值。
@@ -2680,6 +2680,10 @@ def batch_effective_frames(side_frames, profiles, confirmed, neck_decisions=None
                                            +'；本張已人工修改')
             rec['照片補正確認狀態']=st
             rec['照片補正來源']='批次／單張人工修改' if key in confirmed else '分析前設定／逐張自動計算'
+            outside_value=p.get('out_side')
+            rec['外側工作最終採用值']=('有' if outside_value else '沒有') if outside_value is not None else '未判定'
+            rec['外側工作採用來源']=('人工已設定' if 'out_side' in edited else
+                                     str(row.get('外側工作判定狀態','分析前設定')))
             records.append(rec)
         frame_map[side]=pd.DataFrame(records)
     if set(frame_map)>={'右手側','左手側'}:
@@ -2709,22 +2713,66 @@ def batch_effective_frames(side_frames, profiles, confirmed, neck_decisions=None
     return frame_map,status,cases
 
 
+def rula_outside_audit_status(row, side, profile):
+    """Never convert a vision unknown into a posture fact; prioritise only score-changing work."""
+    unknown=[k for k,v in profile.items() if v is None]
+    if not unknown:
+        return {'status':'已判定／人工設定', 'needs_review':False,
+                'score_effect':'已指定有／沒有', 'unknown':False}
+    if unknown==['out_side']:
+        impact=rula_outside_score_sensitivity(row,side,profile)
+        if impact.get('known') and impact.get('same_grand'):
+            return {'status':'未知但免確認', 'needs_review':False,
+                    'score_effect':f"有／無皆 {impact['no_outside'][0]} 分", 'unknown':True}
+        return {'status':'需要人工確認', 'needs_review':True,
+                'score_effect':impact.get('note','無法計算分數影響'), 'unknown':True}
+    return {'status':'其他條件仍需確認', 'needs_review':True,
+            'score_effect':'另有未知條件，無法安全免確認', 'unknown':True}
+
+
 def batch_audit_table(side_frames, profiles, confirmed):
+    """The user-facing CSV distinguishes posture uncertainty from score acceptance."""
     records=[]
     for side,df in side_frames.items():
         if not isinstance(df,pd.DataFrame) or df.empty:continue
         for _,row in df.iterrows():
             sid=int(row['樣本編號']);key=(side,sid)
             p=batch_get_profile(row,side,profiles.get(key,{}))
+            unknown=[k for k,v in p.items() if v is None]
+            if not unknown:
+                assessment={'status':'已判定／人工設定','needs_review':False,'score_effect':'已指定有／沒有','unknown':False}
+            elif unknown==['out_side']:
+                impact=rula_outside_score_sensitivity(row,side,p)
+                safe=bool(impact.get('known') and impact.get('same_grand'))
+                assessment={'status':'未知但免確認' if safe else '需要人工確認',
+                            'needs_review':not safe, 'score_effect':(f"有／無皆 {impact['no_outside'][0]} 分" if safe else impact.get('note','無法計算分數影響')),
+                            'unknown':True}
+            else:
+                assessment={'status':'其他條件仍需確認','needs_review':True,
+                            'score_effect':'另有未知條件，無法安全免確認','unknown':True}
+            outside=p.get('out_side')
+            if outside is None:
+                visible=('未判定（總分不變，免確認）' if not assessment['needs_review']
+                         else '未判定（可能影響評分，待確認）')
+            else:
+                visible='有' if outside else '沒有'
             records.append({'樣本編號':sid,'評估側':side,
                 '已確認':key in confirmed,
-                '補正是否有未知項':any(v is None for v in p.values()),
+                '補正是否有未知項':assessment['unknown'],
+                '外側工作辨識／複核狀態':assessment['status'],
+                '外側工作是否需要人工確認':assessment['needs_review'],
+                '外側工作對總分影響':assessment['score_effect'],
+                '外側工作最終採用值':visible,
+                '外側工作採用來源':('人工已設定' if 'out_side' in profiles.get(key,{})
+                               else str(row.get('外側工作判定狀態','分析前設定'))),
                 '人工修改欄位':','.join(BATCH_FIELDS[k] for k in profiles.get(key,{}) if k in BATCH_FIELDS),
                 '原始時段肌肉使用加分':row.get('肌肉使用加分'),
                 '原始時段負重施力加分':row.get('負重施力加分'),
                 '參考側影片時間(秒)':row.get('參考側影片時間(秒)'),
                 '作業條件設定來源':row.get('作業條件設定來源','分析前的預設作業條件'),
-                **{BATCH_FIELDS[k]:('無法判斷' if v is None else v) for k,v in p.items() if k in BATCH_FIELDS}})
+                **{BATCH_FIELDS[k]: (visible if k=='out_side'
+                    else '未判定（需確認）' if v is None else v)
+                   for k,v in p.items() if k in BATCH_FIELDS}})
     return pd.DataFrame(records)
 
 
@@ -2792,6 +2840,18 @@ def batch_photo_panel():
             st.info('這張的前臂外側工作仍無法從影像確定，但有／無 +1 都不會改變 RULA 總分，無須為此逐張補正；可選擇抽查。')
         else:
             st.warning('這張的前臂外側工作可能影響 RULA 分數，請在「上肢」補正為有／沒有並套用。'+impact['note'])
+    with st.expander('⚡ 單張快速確認：前臂是否向外側工作', expanded=bool(preview_profile.get('out_side') is None)):
+        st.caption('只會改目前選取的這張與這個側別，不會把第 1 張等編號寫死在其他新影片。請以實際作業姿勢為準。')
+        quick=st.radio('這張的前臂向外側工作', ['保留原設定','有','沒有'],
+                       horizontal=True,key='batch_outside_quick_'+side+'_'+str(count))
+        if st.button('保存這張的外側工作，重新計分',key='batch_outside_quick_save_'+side+'_'+str(count),
+                     disabled=(quick=='保留原設定')):
+            new,done=batch_update_profiles(profiles,confirmed,[(side,int(count))],
+                                           {'out_side':quick=='有'})
+            st.session_state.batch_profiles=new
+            st.session_state.batch_confirmed=done
+            st.success('已保存人工確認，重新計算本張 RULA 分數。')
+            st.rerun()
     selected_ids=st.multiselect('批次選取照片（可多選）',ids,default=[],key='batch_selected_'+side,
             help='只需要選擇與初始條件不同的照片；其他照片不用操作。')
     c1,c2=st.columns(2)
@@ -2957,7 +3017,7 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
             status,grand,al=v113_record_status(sid,side,original,decisions,overrides,flagged_keys,notice_keys,legacy)
             batch_state = (batch_status or {}).get((side,sid),'補正已確認')
             if batch_state.startswith('無法確認') and grand is not None and (side,sid) not in overrides:
-                status,grand,al='待釐清補正（'+batch_state+'）',None,None
+                status,grand,al=('待釐清補正（請在照片批次補正選「有」或「沒有」）',None,None)
             elif batch_state == '補正已人工確認' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
                 status='照片補正已人工確認／品質篩檢通過'
             elif batch_state == '採用分析前設定（尚未額外人工修改）' and status in ('自動品質通過','一般提醒：預設保留自動評分'):
@@ -2996,6 +3056,8 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 '是否納入可信統計':grand is not None,  # 技術欄名沿用；畫面須明示含系統評分結果
                 '原始品質狀態':(original.get('品質狀態','') if original is not None else '無有效自動評分'),
                 '正面補正來源':(original.get('正面補正來源','') if original is not None else '無有效資料'),
+                '外側工作最終採用值':(original.get('外側工作最終採用值','') if original is not None else '無有效資料'),
+                '外側工作採用來源':(original.get('外側工作採用來源','') if original is not None else '無有效資料'),
                 '外側工作自動判定':(original.get('外側工作判定狀態','') if original is not None else '無有效資料'),
                 '外側工作判定說明':(original.get('外側工作判定說明','') if original is not None else ''),
                 '採用頸部分數':(int(neck_choice) if neck_choice is not None else
@@ -3005,7 +3067,7 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
             })
     review_df=pd.DataFrame(rows, columns=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','原始Grand Score','原始AL','複核後Grand Score','複核後AL','結果狀態','使用者選擇','是否納入可信統計','原始品質狀態','採用頸部分數','頸部確認狀態','照片補正狀態',
                   '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源',
-                  '外側工作自動判定','外側工作判定說明'])
+                  '外側工作自動判定','外側工作判定說明','外側工作最終採用值','外側工作採用來源'])
     consolidated=[]
     for sid in sorted(allids):
         side_rows={r['評估側']:r for r in rows if r['樣本編號']==sid}
@@ -3106,10 +3168,12 @@ def v113_manual_form(sample,side,item,source_row):
             st.rerun()
 
 
-def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions, overrides, legacy=None, neck_cases=None, neck_decisions=None, batch_status=None, batch_audit=None):
+def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions, overrides, legacy=None, neck_cases=None, neck_decisions=None, batch_status=None, batch_audit=None, work_conditions=None, checklist=None):
     import json
     """Readable ZIP: clean user CSVs plus optional diagnostic material, original photos untouched."""
     reviewed,combined=v113_build_reviewed_data(side_frames,review_items,decisions,overrides,legacy,neck_cases=neck_cases,neck_decisions=neck_decisions,batch_status=batch_status)
+    work_conditions=work_conditions or {}
+    checklist=checklist or {}
     out=io.BytesIO()
     with zipfile.ZipFile(io.BytesIO(original_zip),'r') as source, zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as target:
         included=set()
@@ -3198,12 +3262,51 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
             'Table_A_格數':144,'Table_B_格數':72,'Table_C_格數':81,
             '頸部側彎':'已停用無驗證的自動側彎加分；採作業設定及照片批次修改',
             '正面補正':'旋轉/肩線縮短/肩線傾斜時採預設，不視為高精度 AI 認定',
-            '前臂外側工作':'雙參考肩髖正規化＋前臂方向；無把握時保留未知，不列入正式有效分數',
+            '前臂外側工作':'雙參考肩髖正規化＋前臂方向；分數不變者保留未知、免複核；有影響者要求確認',
+            '實際作業條件已確認': bool(work_conditions.get('work_conditions_verified',False)),
             '操作注意':'RULA 分數與影像姿勢辨識準確率須另以人工驗證'
         },ensure_ascii=False,indent=2).encode('utf-8'))
+        # Separation of field facts and selected scores, plus a concise closure checklist.
+        values=work_conditions
+        verified=bool(values.get('work_conditions_verified',False))
+        write_unique('評估結果/作業條件確認.csv', pd.DataFrame([{
+            '現場條件已人工確認':'是' if verified else '否（待確認）',
+            '填寫負重重量(kg)':values.get('actual_load_kg',''),
+            '填寫重複次數(次/分鐘)':values.get('actual_repetition',''),
+            '肌肉使用預設分數':values.get('muscle',''),
+            '負重施力預設分數':values.get('force',''),
+            '註解':'影像無法自行證明物體重量或工作頻率；需現場資訊支持'}
+        ]).to_csv(index=False).encode('utf-8-sig'))
+        unresolved=int(reviewed['複核後Grand Score'].isna().sum()) if not reviewed.empty else 0
+        number_full=int((combined['雙側結果狀態']=='完整雙側有效').sum()) if not combined.empty and '雙側結果狀態' in combined else None
+        checklist=pd.DataFrame([
+            {'結案項目':'補正與品質：所有可解析影格已處理／有理由排除','判定':'待確認' if unresolved else '自動報表無待分數','說明':f'未輸出正式逐側分數 {unresolved} 筆；請核對排除原因'},
+            {'結案項目':'共同頸部分數需要人工確認者已完成','判定':'請檢查頸部分級確認.csv','說明':'如有待確認，正式雙側分數會留空'},
+            {'結案項目':'前臂外側工作與人工照片已抽樣核對','判定':'需研究者手動勾選','說明':'自動判定不等於人工姿勢真值'},
+            {'結案項目':'現場肌肉使用與負重設定已核實','判定':'已核對' if verified else '尚未核對', '說明':f'實際負重 {values.get("actual_load_kg","") or "未填"} kg；頻率 {values.get("actual_repetition","") or "未填"} 次/分'},
+            {'結案項目':'最終 RULA 查表、CSV、雙側最高分一致','判定':'待執行獨立驗收','說明':'用最新下載 ZIP 對照輸出的逐側與雙側評分'},
+            {'結案項目':'最後研究驗證／系統限制說明已完成','判定':'需研究者手動勾選','說明':'保留人工真值，勿宣稱未測試的自動準確率'},
+        ])
+        write_unique('結案驗收/驗收清單.csv',checklist.to_csv(index=False).encode('utf-8-sig'))
+        checklist_labels=[
+            '前臂向外側工作已抽查，必要影格已按人工觀察補正',
+            '會改變總分的未知前臂補正已確認有／沒有',
+            '共同頸部待確認影格已處理',
+            '影格辨識失敗的樣本已標示排除原因',
+            '肌肉使用與負重已依實際作業條件核對',
+            '最後一次匯出 RULA 查表、逐側與雙側分數已核對',
+            '人工評分比對與影像辨識限制已在專題報告記錄',
+        ]
+        manual_check=pd.DataFrame([{'序號':i+1,'結案驗收項目':label,
+            '使用者已勾選':'是' if checklist.get(i,False) else '否'}
+            for i,label in enumerate(checklist_labels)])
+        write_unique('結案驗收/使用者勾選紀錄.csv',manual_check.to_csv(index=False).encode('utf-8-sig'))
         write_unique('複核後結果/逐側結果.csv',user_report_reviewed(reviewed).to_csv(index=False).encode('utf-8-sig'))
         if batch_audit is not None:
             write_unique('複核後結果/逐張人工補正確認.csv',batch_audit.to_csv(index=False).encode('utf-8-sig'))
+            outside_cols=['樣本編號','評估側','外側工作辨識／複核狀態','外側工作是否需要人工確認','外側工作對總分影響','外側工作最終採用值','外側工作採用來源']
+            if all(col in batch_audit.columns for col in outside_cols):
+                write_unique('複核後結果/外側工作逐筆判定與影響.csv',batch_audit[outside_cols].to_csv(index=False).encode('utf-8-sig'))
         time_rows=[]
         for side,frame in side_frames.items():
             if not isinstance(frame,pd.DataFrame) or frame.empty:continue
@@ -3229,7 +3332,8 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
                 final_grand=final_row.get('複核後Grand Score')
                 final_neck=final_row.get('採用頸部分數')
                 final_al=final_row.get('複核後AL')
-                detail={'樣本編號':sid,'評估側':side,'頸部角度(°)':r.get('頸部角度'),
+                detail={'樣本編號':sid,'評估側':side,'外側工作最終採用值':r.get('外側工作最終採用值',''),
+                    '外側工作採用來源':r.get('外側工作採用來源',''), '頸部角度(°)':r.get('頸部角度'),
                     '頸部角度計算來源':r.get('頸部_v114_計分來源',''),
                     '補正確認狀態':state,
                     '參考側影片時間(秒)':r.get('參考側影片時間(秒)'),
@@ -3320,7 +3424,7 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
             '頸部分級衝突可能改變行動等級時，才需要局部人工確認頸部。\n'
             '所有角度是影像幾何估測值，不是經校準的解剖關節角度。\n'
             '左右頸部分級衝突且可能改變行動等級時，原始報表的系統總分會留空；完成局部頸部確認後，請以「複核後結果」為準。\n'
-            '前臂向外工作不確定時，原始分析仍有暫算分數；複核後結果的正式分數則在人工選擇有／沒有前留空。\n'
+            '前臂向外工作不確定：若有無補正總分相同則免確認、保留診斷；否則必須人工選有／沒有，正式分數暫留空。\n'
             '只要有一側無有效評分，就不輸出完整雙側最高分。\n'
             'RULA 標準查表及角度真值尚需獨立驗證。\n'
         ).encode('utf-8'))
@@ -3387,9 +3491,24 @@ def v8_show_rejected_center():
     if original is not None:
         st.caption('原始自動分數：'+str(original.get('右手 Grand Score' if side=='右手側' else '左手 Grand Score','未提供')))
     is_notice=v112_is_informational_notice(item)
-    options=([V113_KEEP,V113_MANUAL,V113_EXCLUDE] if (is_notice or original is not None)
+    _profile=batch_get_profile(original,side,st.session_state.get('batch_profiles',{}).get((side,sid),{})) if original is not None else {}
+    _outside_impact=(rula_outside_score_sensitivity(original,side,_profile)
+                     if original is not None and _profile.get('out_side') is None else None)
+    _outside_block=bool(_outside_impact and not _outside_impact.get('same_grand'))
+    if _outside_block:
+        st.error('這筆的前臂向外側工作會影響正式評分。「維持自動評分」不能完成確認；請先選有／沒有。')
+        _choose=st.radio('人工看這張照片，前臂是否向外側工作？', ['尚未決定','有','沒有'],
+                         horizontal=True,key='v113_outside_choose_'+key)
+        if st.button('儲存外側工作並重算',disabled=_choose=='尚未決定',key='v113_outside_apply_'+key):
+            updated,completed=batch_update_profiles(st.session_state.get('batch_profiles',{}),
+                st.session_state.get('batch_confirmed',set()), [(side,sid)], {'out_side':_choose=='有'})
+            st.session_state.batch_profiles=updated
+            st.session_state.batch_confirmed=completed
+            st.rerun()
+    options=([V113_PENDING,V113_MANUAL,V113_EXCLUDE] if _outside_block else
+             [V113_KEEP,V113_MANUAL,V113_EXCLUDE] if (is_notice or original is not None)
              else [V113_PENDING,V113_MANUAL,V113_EXCLUDE])
-    stored=decisions.get(key, V113_KEEP if is_notice else V113_PENDING)
+    stored=decisions.get(key, V113_PENDING if _outside_block else V113_KEEP if is_notice else V113_PENDING)
     if stored not in options:stored=options[0]
     selected=st.selectbox('這筆樣本如何處理？',options,index=options.index(stored),key=f'v113_action_{key}')
     if selected!=decisions.get(key):
@@ -3977,7 +4096,8 @@ def user_report_reviewed(df, combined=False):
         cols=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','採用頸部分數','頸部確認狀態',
               '原始Grand Score','複核後Grand Score',
               '複核後AL','結果狀態','照片補正狀態','是否納入可信統計','使用者選擇',
-              '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源']
+              '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源',
+              '外側工作最終採用值','外側工作採用來源']
     mapping={'原始Grand Score':'原始總分','複核後Grand Score':'複核後總分',
              '複核後AL':'複核後行動等級','完整雙側AL':'行動等級',
              '完整雙側最高分':'雙側最高分',
@@ -4016,6 +4136,17 @@ if not callable(globals().get("add_hand_temporal_notes")):
     st.error("部署自檢失敗：add_hand_temporal_notes 未完成定義。請檢查 GitHub 上傳的 222.py 是否完整。")
     st.stop()
 st.caption("自動辨識姿勢與計算 RULA 評分；品質不確定的樣本可檢視原圖、人工評分或剔除。")
+
+RULA_FINAL_CHECKLIST = [
+    '前臂向外側工作已抽查，必要影格已按人工觀察補正',
+    '會改變總分的未知前臂補正已確認有／沒有',
+    '共同頸部待確認影格已處理',
+    '影格辨識失敗的樣本已標示排除原因',
+    '肌肉使用與負重已依實際作業條件核對',
+    '最後一次匯出 RULA 查表、逐側與雙側分數已核對',
+    '人工評分比對與影像辨識限制已在專題報告記錄',
+]
+
 
 st.markdown(
     "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 部分影像補正可選擇自動判讀；手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目仍需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
@@ -4071,6 +4202,7 @@ st.session_state.setdefault('v8_manual_rejected',{})
 st.session_state.setdefault('v113_review_decisions',{})
 st.session_state.setdefault('shared_neck_cases',{})
 st.session_state.setdefault('shared_neck_decisions',{})
+st.session_state.setdefault('closure_check_values',{})
 st.session_state.setdefault('v9_confirmed',False)
 st.session_state.setdefault('v9_sync_mode','尚未同步')
 st.session_state.setdefault('v9_confirmed_signature',None)
@@ -4316,6 +4448,13 @@ if page == 0:
     with d: num_samples=v8_widget('slider','抽樣數量','num_samples',25,min_value=5,max_value=100)
     with e: combo_muscle=v8_widget('selectbox','肌肉使用預設分數','muscle',MUSCLE_OPTIONS[0],options=MUSCLE_OPTIONS)
     with f: combo_force=v8_widget('selectbox','負重／施力預設分數','force',FORCE_OPTIONS[0],options=FORCE_OPTIONS)
+    with st.expander('📋 肌肉使用／負重｜結案前現場條件確認', expanded=True):
+        v8_widget('text_input','實際單次負重重量（kg，可填範圍）','actual_load_kg','',
+                  placeholder='例如 5 或 4～6；無資料可留空')
+        v8_widget('text_input','實際作業重複頻率（次／分鐘）','actual_repetition','',
+                  placeholder='例如 5；不確定可留空')
+        v8_widget('checkbox','我已依現場條件核對肌肉使用 +0/+1、負重 +0～+3 及影片時段','work_conditions_verified',False)
+        st.caption('勾選僅代表你已核對，不會替你猜測重量或自動改分；未勾選也可試跑，但下載報表會標示「待確認」。')
     # 影片時段以必填的「右側／左側原始影片秒數」為準，不使用相對同步秒數。
     with st.expander('🎬 影片時間軸｜拖曳區間設定負重與肌肉使用', expanded=False):
         st.caption('直接在影片縮圖時間軸選取兩端點，也能新增多組時段、拖曳起點／終點。'
@@ -4548,6 +4687,8 @@ if page == 4:
     ready_files=[name for name,f in [('正面',vid_front_file),('右側',vid_right_file if '右手側' in rula_eval_sides(eval_mode) else None),('左側',vid_left_file if '左手側' in rula_eval_sides(eval_mode) else None)] if f]
     st.write('已上傳：'+('、'.join(ready_files) if ready_files else '尚未上傳影片'))
     st.write(f'抽樣數：{num_samples}　｜　分析模式：{eval_mode}　｜　手腕來源：Hand 優先／Pose 2D 備援')
+    if not st.session_state.v8_values.get('work_conditions_verified',False):
+        st.warning('肌肉使用／負重尚未核實，請回第 1 步確認；可試跑，但不能直接當作已驗收的正式結案結果。')
     if leg_support_choice==LEG_OPTIONS[0] or any((right_wrist_twist_choice if side=='右手側' else left_wrist_twist_choice)==TWIST_OPTIONS[0]
          for side in rula_eval_sides(eval_mode)):
         st.warning('請先返回「人工條件」填妥腿足支撐、所選側別的手腕扭轉，才能開始分析。')
@@ -4603,6 +4744,9 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
         st.session_state.v113_review_decisions = {}
         st.session_state.shared_neck_cases = {}
         st.session_state.shared_neck_decisions = {}
+        st.session_state.closure_check_values = {}
+        for _ci in range(7):
+            st.session_state.pop('rula_closure_'+str(_ci),None)
         st.session_state.v8_rejected_rows = []
         st.session_state.v8_rejected_photos = {}
         st.session_state.v8_manual_rejected = {}
@@ -5556,6 +5700,8 @@ if st.session_state.v9_screen == 'results':
                       if item.get('需要人工確認') and sid not in st.session_state.get('shared_neck_decisions',{})]
         if pending_neck:
             st.warning(f'有 {len(pending_neck)} 筆頸部姿勢可能改變風險行動等級，尚未確認。請至「角度檢視 → 頸部」只確認頸部分數。未確認者不列入可信統計。')
+        if not st.session_state.get('v8_values',{}).get('work_conditions_verified',False):
+            st.warning('結案提醒：尚未確認現場負重與肌肉使用加分，下載 ZIP 將保留「待確認」註記。')
         _,batch_states,_=batch_current_effective(st.session_state)
         batch_unknown=sum(x.startswith('無法確認') for x in batch_states.values())
         if batch_unknown:
@@ -5563,9 +5709,9 @@ if st.session_state.v9_screen == 'results':
         else:
             st.info('已依影片時段、影像辨識和預設作業條件產生 RULA 評分；僅在條件不同時才需批次修改。')
         (tab_overview, tab_batch, tab_review, tab_rejected, tab_angles,
-         tab_gallery, tab_reports, tab_download) = st.tabs([
+         tab_gallery, tab_reports, tab_closure, tab_download) = st.tabs([
             '📈 風險總覽', '✅ 照片批次補正', '🔎 異常／人工覆核', '🧩 剔除樣本',
-            '📐 角度檢視', '🖼️ 影格照片', '📋 完整報表', '📦 下載',
+            '📐 角度檢視', '🖼️ 影格照片', '📋 完整報表', '✅ 結案驗收', '📦 下載',
         ], key='v9_result_tabs', on_change='rerun')
         if tab_overview.open:
             with tab_overview:
@@ -5699,6 +5845,27 @@ if st.session_state.v9_screen == 'results':
                     st.caption('僅保留評分結果與實際採用角度。更詳細的研發診斷資訊不混入一般報表。')
                 else:
                     st.warning('目前這個報表沒有可用資料，請查看其他類型。')
+        if tab_closure.open:
+            with tab_closure:
+                st.subheader('結案驗收｜完成一項勾選一項')
+                st.caption('這份清單是工作進度紀錄，不會因勾選而擅自改寫辨識結果或 RULA 分數。結果會另外存入下載 ZIP。')
+                selected=st.session_state.setdefault('closure_check_values',{})
+                finished=0
+                for _ci,_label in enumerate(RULA_FINAL_CHECKLIST):
+                    _checked=st.checkbox(_label, value=bool(selected.get(_ci,False)),key='rula_closure_'+str(_ci))
+                    selected[_ci]=bool(_checked)
+                    finished+=bool(_checked)
+                st.progress(finished/len(RULA_FINAL_CHECKLIST),text=f'結案驗收 {finished}/{len(RULA_FINAL_CHECKLIST)} 項完成')
+                latest_reviewed,_=v113_current_reports()
+                remain=int(latest_reviewed['複核後Grand Score'].isna().sum()) if not latest_reviewed.empty else 0
+                st.caption(f'本次輸出尚無正式逐側分數：{remain} 筆（包含辨識失敗／人工剔除，需核對原因）。')
+                if finished==len(RULA_FINAL_CHECKLIST):
+                    st.success('清單已全部勾選。請下載最後 ZIP，再做一次獨立分數／檔案驗收。')
+                if st.button('清除所有勾選（重新驗收）',key='clear_closure_checks'):
+                    st.session_state.closure_check_values={}
+                    for _ci in range(len(RULA_FINAL_CHECKLIST)):
+                        st.session_state.pop('rula_closure_'+str(_ci),None)
+                    st.rerun()
         if tab_download.open:
             with tab_download:
                 st.subheader('下載評估資料')
@@ -5725,7 +5892,9 @@ if st.session_state.v9_screen == 'results':
                         st.session_state.get('shared_neck_decisions',{}),
                         batch_status=batch_status,
                         batch_audit=batch_audit_table(batch_source_frames(st.session_state),
-                            st.session_state.get('batch_profiles',{}),st.session_state.get('batch_confirmed',set())))
+                            st.session_state.get('batch_profiles',{}),st.session_state.get('batch_confirmed',set())),
+                        work_conditions=st.session_state.get('v8_values',{}),
+                        checklist=st.session_state.get('closure_check_values',{}))
                     render_blob_download_button(finalized,st.session_state.zip_filename,
                                                 f'📥 下載 {mode_now} 原始＋複核後報表 ZIP')
                 st.caption('ZIP 的「原始分析」保留首次系統計算結果；「複核後結果」包含沿用設定的系統初始與人工修正結果，並標明來源。未經人工驗證不應稱為準確率。')
