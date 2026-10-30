@@ -32,6 +32,12 @@ try:
     import mediapipe as mp
 except Exception as exc:
     _show_native_import_diagnostic("MediaPipe", exc)
+# 舊版 Pose API 必須搭配支援 mp.solutions 的 MediaPipe；新版移除時明確提示。
+if not hasattr(mp, 'solutions') or not hasattr(mp.solutions, 'pose'):
+    st.set_page_config(page_title='RULA｜MediaPipe 版本不相容', layout='centered')
+    st.error('目前安裝的 MediaPipe 已不支援 mp.solutions.pose。')
+    st.info('請使用本專案 requirements.txt（mediapipe==0.10.21，建議 Python 3.11），不要直接升級到 0.10.30 以上；或另行將完整專案遷移至 Tasks Pose API。')
+    st.stop()
 import math
 import numpy as np
 import pandas as pd
@@ -53,7 +59,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
 # which is typically read-only on hosted deployments.
 POSE_MODEL_COMPLEXITY = 1
-APP_BUILD_TAG = "RULA_VERIFIED_TABLES_FRONT_REVIEW_2026-10-30"
+APP_BUILD_TAG = "RULA_OUTSIDE_WORK_DUAL_REFERENCE_PENDINGSAFE_2026-10-30"
 
 # RULA 1993/2016 標準工作表 (使用者提供論文 表3-8, 表3-9, 表3-10)
 # 三個互相獨立的矩陣，在 tests/test_independent_rula_tables.py 逐格比對固定人工轉錄值。
@@ -597,6 +603,12 @@ def v11_update_qc(data, snap, side, side_cap=None, side_frame_idx=None, side_fps
         cur=qc.get('品質最低可見度',np.nan)
         qc.update(v11_cross_view_hint(other_frame,pose_model,side,float(cur) if np.isfinite(cur) else 0.0))
     v11_1_neck_crosscheck(qc,data,neck_peer)
+    # 前臂「待複核」可能影響總分；列入正式複核中心（不同於一般軟品質提醒）。
+    if data.get('外側工作判定狀態') == '待複核':
+        qc['品質狀態'] = '需人工複核'
+        qc['品質原因'] = str(qc.get('品質原因', '')) + '；前臂向外側工作尚不能判定，需確認 +1'
+        qc['品質嫌疑關節'] = ','.join(sorted(set(filter(None,
+            str(qc.get('品質嫌疑關節', '')).split(',') + ['el', 'wr']))))
     qc['品質可直接採信']=(qc['品質狀態']!='需人工複核')
     qc['品質是否列入複核中心']=(qc['品質狀態']=='需人工複核' or
                         (policy.startswith('審慎') and qc['品質狀態']=='留意'))
@@ -620,6 +632,15 @@ def v11_front_fallback_note(qc, data, front_ok, auto_settings):
     # 保留骨架自身的品質可直接採信與列入複核判斷，不因 Front 影格品質而覆蓋。
     qc['品質原因']=str(qc.get('品質原因',''))+'；正面補正無法影像判斷，沿用分析前的作業設定'
     qc['品質計分說明']='側面骨架結果照常採用；正面補正來自作業設定，例外可批次修改'
+    # 有 Front、但該影格因轉向等因素失去外側工作辨識能力時，必須列入局部複核。
+    # 「全段未上傳 Front」則依使用者事先作業設定，不使每一張自動排入複核中心。
+    if (bool(auto_settings.get('is_out_to_side', False)) and
+        data.get('外側工作判定狀態') == '人工設定（正面不可用）'):
+        qc['品質狀態'] = '需人工複核'
+        qc['品質可直接採信'] = False
+        qc['品質是否列入複核中心'] = True
+        qc['品質原因'] += '；此張 Front 視角不可靠，前臂外側工作 +1 尚未確認'
+        qc['品質計分說明'] = '前臂向外側工作沿用暫算值；需局部人工複核後才能採信'
     data.update(qc)
     return qc
 
@@ -1356,6 +1377,61 @@ def draw_full_biomechanical_skeleton(
 
     return out
 
+# ===== 結案候選：前臂向外側工作，雙軀幹參考＋前臂方向（僅影像代理值） =====
+# 注意：以下門檻是工程測試值，並非原始 RULA 的角度／距離標準。
+# 在單張正面投影無法確認時回傳「待複核」，不可以直接當成 RULA 正式真值。
+RULA_OUTSIDE_SHOULDER_YES = 0.30    # 手腕超出同側肩點的肩寬比例
+RULA_OUTSIDE_HIP_YES = 0.28         # 手腕超出同側髖點的肩寬比例
+RULA_OUTSIDE_FOREARM_YES = 0.16     # 腕相對肘的側向伸出肩寬比例
+RULA_OUTSIDE_DIRECTION_YES = 0.26   # 前臂側向投影佔前臂投影長比例
+
+
+def rula_outside_work_geometry(sh_left, sh_right, hp_left, hp_right, elbow, wrist, target_side):
+    """純 2D 投影的三態分類：自動是／自動否／待複核。
+
+    依*人體*肩線定義左右方向、以肩寬正規化，分別比較同側肩與髖；
+    要求前臂肘→腕確實向外，防止把自然下垂或只有上臂外展誤判為向外工作。
+    本函式不分析工作物／施力方向；正面大幅轉向應由呼叫端先拒絕。
+    """
+    v = [np.asarray(p, dtype=float) for p in (sh_left, sh_right, hp_left, hp_right, elbow, wrist)]
+    if any(p.shape != (2,) or not np.isfinite(p).all() for p in v):
+        return {'status': '待複核', 'reason': '肩、髖、肘或腕座標缺失／不合理'}
+    sl, sr, hl, hr, el, wr = v
+    shoulder_axis = sr - sl
+    shoulder_width = float(np.linalg.norm(shoulder_axis))
+    if shoulder_width < 12.0:
+        return {'status': '待複核', 'reason': '肩寬投影過短，無法判定外側工作'}
+    lateral_axis = shoulder_axis / shoulder_width
+    is_right = target_side == '右手側'
+    if target_side not in ('右手側', '左手側'):
+        return {'status': '待複核', 'reason': '未指定有效評估側別'}
+    side_sign = 1.0 if is_right else -1.0
+    own_sh = sr if is_right else sl
+    own_hp = hr if is_right else hl
+    shoulder_margin = side_sign * float(np.dot(wr - own_sh, lateral_axis)) / shoulder_width
+    hip_margin = side_sign * float(np.dot(wr - own_hp, lateral_axis)) / shoulder_width
+    forearm_lateral = side_sign * float(np.dot(wr - el, lateral_axis)) / shoulder_width
+    forearm_length = float(np.linalg.norm(wr - el))
+    if forearm_length < max(9.0, 0.16 * shoulder_width):
+        return {'status': '待複核', 'reason': '前臂投影過短或遮擋，方向不可靠',
+                'wrist_shoulder_margin': round(shoulder_margin, 3),
+                'wrist_hip_margin': round(hip_margin, 3)}
+    direction_ratio = forearm_lateral * shoulder_width / forearm_length
+    metrics = {'wrist_shoulder_margin': round(shoulder_margin, 3),
+               'wrist_hip_margin': round(hip_margin, 3),
+               'forearm_lateral_margin': round(forearm_lateral, 3),
+               'forearm_direction_ratio': round(direction_ratio, 3)}
+    if (shoulder_margin >= RULA_OUTSIDE_SHOULDER_YES and
+        hip_margin >= RULA_OUTSIDE_HIP_YES and
+        forearm_lateral >= RULA_OUTSIDE_FOREARM_YES and
+        direction_ratio >= RULA_OUTSIDE_DIRECTION_YES):
+        return {'status': '自動是', 'reason': '腕點超出同側肩髖＋肘至腕朝人體外側延伸', **metrics}
+    if (shoulder_margin <= 0.10 or hip_margin <= 0.10 or
+        forearm_lateral <= 0.045 or direction_ratio <= 0.10):
+        return {'status': '自動否', 'reason': '手腕未明顯離開軀幹兩參考點或前臂未朝外側延伸', **metrics}
+    return {'status': '待複核', 'reason': '位置／前臂方向介於可靠判定範圍，待人工確認', **metrics}
+
+
 # ==================== 【正面鏡頭：冠狀面/水平面補正分析 (支援指定單側)】 ====================
 def analyze_front_camera(frame, pose_model, target_side):
     """正面影像補正。若核心點品質不足，回報失敗而不是默認所有補正皆為否。"""
@@ -1429,11 +1505,22 @@ def analyze_front_camera(frame, pose_model, target_side):
         return False, {}
     elbow_out = side_sign * float(np.dot(elbow - target_sh, horiz)) / shoulder_width
     wrist_midline = side_sign * float(np.dot(wrist - shoulder_mid, horiz)) / shoulder_width
-    elbow_midline = side_sign * float(np.dot(elbow - shoulder_mid, horiz)) / shoulder_width
     # 只把具有明確幾何證據的情況視為 True，設中性帶避免邊界抖動。
     is_abducted = bool(elbow_out > 0.33)
     is_across_midline = bool(wrist_midline < -0.12)
-    is_out_to_side = bool(not is_across_midline and elbow_midline > 0.65 and wrist_midline > 0.80)
+    outside = rula_outside_work_geometry(
+        sh_left, sh_right, hp_left, hp_right, elbow, wrist, target_side)
+    # 兩個條件屬同一前臂 RULA +1；跨中線成立時不重複判向外工作。
+    if is_across_midline:
+        outside = {**outside, 'status': '自動否', 'reason': '已歸類為跨越中線（不重複判向外）'}
+    # 單張影像無法判斷＝「待複核」；此處僅輸出暫算的 False，正式採信必須人工確認。
+    is_out_to_side = bool(outside['status'] == '自動是')
+    # 前臂與同側髖的可見度必須比其他正面條件更嚴格；否則不能正面自動加分。
+    outside_vis = min(float(lm[i].visibility) for i in (sh_idx, el_idx, wr_idx, 23, 24))
+    if outside_vis < 0.55 and not is_across_midline:
+        outside['status'] = '待複核'
+        outside['reason'] = f'肘／腕／肩／髖可見度不足（最低 {outside_vis:.2f}）'
+        is_out_to_side = False
     # 軀幹左右傾斜用骨盆中點到肩中點相對鉛垂線，避免單邊聳肩造成假陽性。
     trunk_lateral_angle = float(np.degrees(np.arctan2(abs(shoulder_mid[0] - hip_mid[0]), max(abs(shoulder_mid[1] - hip_mid[1]), 1e-6))))
     # 耳中點相對肩中點的側移，與軀幹偏斜量相減，用於估測頸部相對側彎。
@@ -1446,6 +1533,12 @@ def analyze_front_camera(frame, pose_model, target_side):
         "is_abducted": is_abducted,
         "is_across_midline": is_across_midline,
         "is_out_to_side": is_out_to_side,
+        "outside_work_status": outside['status'],
+        "outside_work_reason": outside['reason'],
+        "outside_wrist_shoulder_margin": outside.get('wrist_shoulder_margin', np.nan),
+        "outside_wrist_hip_margin": outside.get('wrist_hip_margin', np.nan),
+        "outside_forearm_lateral_margin": outside.get('forearm_lateral_margin', np.nan),
+        "outside_forearm_direction_ratio": outside.get('forearm_direction_ratio', np.nan),
         "is_side_bending": bool(trunk_lateral_angle > 12.0),
         # 已由本批 9 張正面影片核對發現大量假陽性，暫停此項自動加分。
         # 保留代理角度診斷，但正式分數只採人工事先確認/批次修改。
@@ -1937,7 +2030,17 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             f"{side_prefix}上臂支撐／倚靠補正": "是 (-1分)" if manual_mods.get("arm_supported") else "否（人工確認）",
             f"{side_prefix}上臂向後伸展補正": "是（後伸）" if is_extended else "否",
             f"{side_prefix}橫越中線補正": "是 (+1分)" if front_mods.get("is_across_midline") else "否",
-            f"{side_prefix}前臂向外側工作補正": "是 (+1分)" if front_mods.get("is_out_to_side") else "否（影像代理判斷）",
+            f"{side_prefix}前臂向外側工作補正": (
+                "是 (+1分)" if front_mods.get("is_out_to_side") else
+                ("待複核（暫按 0 補正；不代表確定沒有）" if front_mods.get('outside_work_status') == '待複核'
+                 else "否（影像代理判斷／人工設定）")),
+            "外側工作判定狀態": ("人工設定" if not auto_selection.get('is_out_to_side', True)
+                                     else front_mods.get('outside_work_status', '來源未記錄')),
+            "外側工作判定說明": front_mods.get('outside_work_reason', ''),
+            "外側工作_手腕超肩比例": front_mods.get('outside_wrist_shoulder_margin', np.nan),
+            "外側工作_手腕超髖比例": front_mods.get('outside_wrist_hip_margin', np.nan),
+            "外側工作_前臂外伸比例": front_mods.get('outside_forearm_lateral_margin', np.nan),
+            "外側工作_前臂方向比例": front_mods.get('outside_forearm_direction_ratio', np.nan),
             "軀幹側彎補正": "是 (+1分)" if front_mods.get("is_side_bending") else "否（影像代理判斷）",
             "軀幹扭轉補正": "是 (+1分)" if manual_mods.get("trunk_twisted") else "否（人工確認）",
             "軀幹向後伸展": "是（軀幹基礎分 2）" if is_trunk_extended else "否",
@@ -2386,9 +2489,15 @@ def batch_base_profile(row, side):
     pre='右手' if side=='右手側' else '左手'
     def yes(col):
         return str(row.get(col,'否')).startswith('是')
+    # 前臂外側工作三態：讀到「待複核」或 Front 失敗時，必須留下 None。
+    # 不能用 str.startswith('是') 把未知擅自轉成 False，否則人工修正前
+    # 的候選 0 分會在正式 CSV 被誤當成已通過的自動評分。
+    outside_status = str(row.get('外側工作判定狀態', ''))
+    outside_unknown = outside_status in ('待複核', '人工設定（正面不可用）')
+    outside_value = None if outside_unknown else yes(pre+'前臂向外側工作補正')
     return {
        'abducted':yes(pre+'上臂外展補正'), 'across':yes(pre+'橫越中線補正'),
-       'out_side':yes(pre+'前臂向外側工作補正'),
+       'out_side':outside_value,
        'trunk_side':yes('軀幹側彎補正'),'neck_side':yes('頸部側彎補正'),
        'shoulder_raised':yes(pre+'肩部抬高補正'),
        'arm_supported':yes(pre+'上臂支撐／倚靠補正'),
@@ -2608,6 +2717,8 @@ def batch_photo_panel():
                  for k,v in cur.items() if k in BATCH_FIELDS])
         st.dataframe(preview,use_container_width=True,hide_index=True)
         st.caption('目前顯示影片時段設定、初始作業條件及自動辨識結果；沒有不同就不必修改。')
+    if batch_get_profile(current_row,side,profiles.get((side,int(count)),{})).get('out_side') is None:
+        st.warning('這張照片的「前臂向外側工作」為待確認；請在下方「上肢」補正將它明確設為有／沒有並套用。未確認前不會列入正式有效結果。')
     selected_ids=st.multiselect('批次選取照片（可多選）',ids,default=[],key='batch_selected_'+side,
             help='只需要選擇與初始條件不同的照片；其他照片不用操作。')
     c1,c2=st.columns(2)
@@ -2812,13 +2923,16 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 '是否納入可信統計':grand is not None,  # 技術欄名沿用；畫面須明示含系統評分結果
                 '原始品質狀態':(original.get('品質狀態','') if original is not None else '無有效自動評分'),
                 '正面補正來源':(original.get('正面補正來源','') if original is not None else '無有效資料'),
+                '外側工作自動判定':(original.get('外側工作判定狀態','') if original is not None else '無有效資料'),
+                '外側工作判定說明':(original.get('外側工作判定說明','') if original is not None else ''),
                 '採用頸部分數':(int(neck_choice) if neck_choice is not None else
                        (neck_case['選定共用頸部分數'] if neck_case and not neck_case['需要人工確認']
                         else (int(original.get('頸部分數')) if original is not None and neck_case is None and original.get('頸部分數') is not None else None))),
                 '頸部確認狀態':('待人工確認' if neck_case and neck_case['需要人工確認'] and neck_choice is None else ('人工已確認' if neck_choice is not None else ('系統自動共用' if neck_case else '單側評估'))),
             })
     review_df=pd.DataFrame(rows, columns=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','原始Grand Score','原始AL','複核後Grand Score','複核後AL','結果狀態','使用者選擇','是否納入可信統計','原始品質狀態','採用頸部分數','頸部確認狀態','照片補正狀態',
-                  '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源'])
+                  '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源',
+                  '外側工作自動判定','外側工作判定說明'])
     consolidated=[]
     for sid in sorted(allids):
         side_rows={r['評估側']:r for r in rows if r['樣本編號']==sid}
@@ -3011,6 +3125,7 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
             'Table_A_格數':144,'Table_B_格數':72,'Table_C_格數':81,
             '頸部側彎':'已停用無驗證的自動側彎加分；採作業設定及照片批次修改',
             '正面補正':'旋轉/肩線縮短/肩線傾斜時採預設，不視為高精度 AI 認定',
+            '前臂外側工作':'雙參考肩髖正規化＋前臂方向；無把握時保留未知，不列入正式有效分數',
             '操作注意':'RULA 分數與影像姿勢辨識準確率須另以人工驗證'
         },ensure_ascii=False,indent=2).encode('utf-8'))
         write_unique('複核後結果/逐側結果.csv',user_report_reviewed(reviewed).to_csv(index=False).encode('utf-8-sig'))
@@ -3132,6 +3247,7 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
             '頸部分級衝突可能改變行動等級時，才需要局部人工確認頸部。\n'
             '所有角度是影像幾何估測值，不是經校準的解剖關節角度。\n'
             '左右頸部分級衝突且可能改變行動等級時，原始報表的系統總分會留空；完成局部頸部確認後，請以「複核後結果」為準。\n'
+            '前臂向外工作不確定時，原始分析仍有暫算分數；複核後結果的正式分數則在人工選擇有／沒有前留空。\n'
             '只要有一側無有效評分，就不輸出完整雙側最高分。\n'
             'RULA 標準查表及角度真值尚需獨立驗證。\n'
         ).encode('utf-8'))
@@ -3207,7 +3323,11 @@ def v8_show_rejected_center():
         # Store even the default so the exported audit trail reflects the user's choice.
         decisions[key]=selected
     if selected==V113_KEEP:
-        st.success('這筆側別樣本保留原自動評分；選擇其他處理方式時會更新可信統計與複核後報表。')
+        _profile=batch_get_profile(original,side,st.session_state.get('batch_profiles',{}).get((side,sid),{})) if original is not None else {}
+        if _profile.get('out_side','not_present') is None:
+            st.warning('前臂向外側工作尚未能辨識：這裡選「維持自動評分」仍不會使暫算分數成為正式有效結果。請到「照片批次修改」把本張外側工作選成「有」或「沒有」，或使用人工重新評分。')
+        else:
+            st.success('此筆採用自動計算及已儲存的人工補正；仍須確認其他品質疑慮。')
     elif selected==V113_EXCLUDE:
         st.warning('已剔除此側樣本的可信分數；原圖、原始 CSV 與影像測量角度依然保留。雙側分析需兩側都可用，才會輸出完整雙側最高分。')
     elif selected==V113_MANUAL:
@@ -4016,7 +4136,7 @@ TWIST_OPTIONS=['請先目視確認…','中間範圍（1分）','接近旋轉極
 AUTO_FLAGS={
     'is_abducted':'上臂外展（正面肩肘相對位置）',
     'is_across_midline':'前臂跨越身體中線（正面向量投影）',
-    'is_out_to_side':'前臂向外側工作（正面位置）',
+    'is_out_to_side':'前臂向外側工作（腕超肩髖＋前臂側伸；不確定列複核）',
     'is_side_bending':'軀幹側彎（肩髖中心線）',
     # 由正面影片人工核對發現大量誤判，此項不再列入自動辨識選項。
     'upper_arm_extended':'上臂向後伸展（側面有向角度）',
@@ -4255,6 +4375,7 @@ elif page == 2:
             auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,True)
     if factory_mode:
         auto_selection.update({flag:False for flag in front_labels})
+    st.info('前臂向外側工作：已改為肩膀＋髖部雙參考點與肘到腕方向共同判斷。結果不確定的影格列入複核中心，暫算分數不能直接當正式結論。')
     st.info('頸部側彎：依本次人工比對，舊自動判斷有假陽性，已停用自動加分。整段未見明顯側彎可在下方只確認一次；若部分照片有側彎，再用照片批次修改。')
     with st.expander('無正面影片：人工確認補正' if factory_mode else '僅設定未自動判斷的項目',expanded=True):
         for flag,label in front_labels.items():
@@ -4329,6 +4450,7 @@ def manual_without_front(side_name):
     # 分析前只是系統計算值；正式採信必須在分析後的照片批次補正中心確認。
     defaults = {flag:bool(manual_front.get((side_name,flag),False)) for flag in front_labels}
     defaults.update({'front_auto_paused':True,'front_screening_reason':'未上傳正面影片：沿用分析前的人工預設',
+                     'outside_work_status':'人工設定（無正面）', 'outside_work_reason':'無正面影片；以工作初始條件暫算，例外需批次複核',
                      'front_keypoint_visibility':0.0,'front_rotation_warning':False})
     return defaults
 
@@ -4337,6 +4459,7 @@ def rula_front_frame_fallback(side_name, reason='正面影像不可用'):
     """正面自動補正失敗不應阻止仍可運作的側面 RULA 計分。"""
     base = {flag: bool(manual_front.get((side_name,flag),False)) for flag in front_labels}
     base.update({'front_auto_paused':True,'front_screening_reason':reason,
+                 'outside_work_status':'人工設定（正面不可用）', 'outside_work_reason':reason+'；沿用分析前人工設定',
                  'front_rotation_warning':False,'front_keypoint_visibility':0.0,
                  'neck_lateral_angle_proxy':float('nan'),'trunk_lateral_angle_proxy':float('nan')})
     return base
