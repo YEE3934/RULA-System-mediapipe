@@ -53,43 +53,54 @@ from PIL import Image, ImageDraw, ImageFont
 # Complexity 2 asks MediaPipe to download pose_landmark_heavy.tflite into site-packages,
 # which is typically read-only on hosted deployments.
 POSE_MODEL_COMPLEXITY = 1
-APP_BUILD_TAG = "RULA_INTERACTIVE_VIDEO_TIMELINE_2026-10-30"
+APP_BUILD_TAG = "RULA_VERIFIED_TABLES_FRONT_REVIEW_2026-10-30"
 
-# ==================== 【沿用 v6 RULA 查表矩陣：仍需標準工作表逐格核對】 ====================
-TABLE_A = {
-    1: { 1: {1: {1:1, 2:2}, 2: {1:2, 2:2}, 3: {1:2, 2:3}, 4: {1:3, 2:3}},
-         2: {1: {1:2, 2:2}, 2: {1:2, 2:3}, 3: {1:3, 2:3}, 4: {1:3, 2:4}},
-         3: {1: {1:2, 2:3}, 2: {1:3, 2:3}, 3: {1:3, 2:4}, 4: {1:4, 2:4}} },
-    2: { 1: {1: {1:1, 2:2}, 2: {1:2, 2:2}, 3: {1:3, 2:3}, 4: {1:3, 2:4}},
-         2: {1: {1:2, 2:3}, 2: {1:3, 2:3}, 3: {1:3, 2:4}, 4: {1:4, 2:4}},
-         3: {1: {1:3, 2:4}, 2: {1:3, 2:4}, 3: {1:4, 2:4}, 4: {1:4, 2:5}} },
-    3: { 1: {1: {1:2, 2:3}, 2: {1:3, 2:3}, 3: {1:3, 2:4}, 4: {1:4, 2:4}},
-         2: {1: {1:3, 2:3}, 2: {1:3, 2:4}, 3: {1:4, 2:4}, 4: {1:4, 2:5}},
-         3: {1: {1:3, 2:4}, 2: {1:4, 2:4}, 3: {1:4, 2:5}, 4: {1:5, 2:5}} },
-    4: { 1: {1: {1:3, 2:4}, 2: {1:4, 2:4}, 3: {1:4, 2:5}, 4: {1:5, 2:5}},
-         2: {1: {1:4, 2:4}, 2: {1:4, 2:5}, 3: {1:4, 2:5}, 4: {1:5, 2:6}},
-         3: {1: {1:4, 2:5}, 2: {1:5, 2:5}, 3: {1:5, 2:6}, 4: {1:6, 2:7}} },
-    5: { 1: {1: {1:4, 2:4}, 2: {1:4, 2:5}, 3: {1:4, 2:5}, 4: {1:5, 2:6}},
-         2: {1: {1:4, 2:5}, 2: {1:5, 2:5}, 3: {1:5, 2:6}, 4: {1:6, 2:7}},
-         3: {1: {1:5, 2:6}, 2: {1:6, 2:6}, 3: {1:6, 2:7}, 4: {1:7, 2:7}} },
-    6: { 1: {1: {1:5, 2:5}, 2: {1:5, 2:6}, 3: {1:5, 2:6}, 4: {1:6, 2:7}},
-         2: {1: {1:5, 2:6}, 2: {1:6, 2:6}, 3: {1:6, 2:7}, 4: {1:7, 2:7}},
-         3: {1: {1:6, 2:7}, 2: {1:7, 2:7}, 3: {1:7, 2:8}, 4: {1:8, 2:8}} }
-}
-
-TABLE_B = {
-    1: {1: {1:1, 2:3}, 2: {1:2, 2:3}, 3: {1:3, 2:4}, 4: {1:5, 2:5}, 5: {1:6, 2:6}, 6: {1:7, 2:7}},
-    2: {1: {1:2, 2:3}, 2: {1:3, 2:3}, 3: {1:4, 2:4}, 4: {1:5, 2:5}, 5: {1:6, 2:7}, 6: {1:7, 2:8}},
-    3: {1: {1:3, 2:3}, 2: {1:4, 2:4}, 3: {1:4, 2:5}, 4: {1:6, 2:6}, 5: {1:7, 2:7}, 6: {1:7, 2:8}},
-    4: {1: {1:5, 2:5}, 2: {1:5, 2:6}, 3: {1:6, 2:7}, 4: {1:7, 2:7}, 5: {1:8, 2:8}, 6: {1:8, 2:8}},
-    5: {1: {1:6, 2:6}, 2: {1:6, 2:7}, 3: {1:7, 2:8}, 4: {1:8, 2:8}, 5: {1:8, 2:8}, 6: {1:8, 2:8}},
-    6: {1: {1:7, 2:7}, 2: {1:7, 2:8}, 3: {1:8, 2:8}, 4: {1:8, 2:8}, 5: {1:8, 2:8}, 6: {1:8, 2:8}}
-}
-
-TABLE_C = [
-    [1, 2, 3, 3, 4, 5, 5], [2, 2, 3, 4, 4, 5, 5], [3, 3, 3, 4, 4, 5, 6], [3, 3, 3, 4, 5, 6, 6],
-    [4, 4, 4, 5, 6, 7, 7], [4, 4, 5, 6, 6, 7, 7], [5, 5, 6, 6, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7]
+# RULA 1993/2016 標準工作表 (使用者提供論文 表3-8, 表3-9, 表3-10)
+# 三個互相獨立的矩陣，在 tests/test_independent_rula_tables.py 逐格比對固定人工轉錄值。
+RULA_TABLE_A_ROWS = [
+    [1, 2, 2, 2, 2, 3, 3, 3],
+    [2, 2, 2, 2, 3, 3, 3, 3],
+    [2, 3, 3, 3, 3, 3, 4, 4],
+    [2, 3, 3, 3, 3, 4, 4, 4],
+    [3, 3, 3, 3, 3, 4, 4, 4],
+    [3, 4, 4, 4, 4, 4, 5, 5],
+    [3, 3, 4, 4, 4, 4, 5, 5],
+    [3, 4, 4, 4, 4, 4, 5, 5],
+    [4, 4, 4, 4, 4, 5, 5, 5],
+    [4, 4, 4, 4, 4, 5, 5, 5],
+    [4, 4, 4, 4, 4, 5, 5, 5],
+    [4, 4, 4, 5, 5, 5, 6, 6],
+    [5, 5, 5, 5, 5, 6, 6, 7],
+    [5, 6, 6, 6, 6, 6, 7, 7],
+    [6, 6, 6, 7, 7, 7, 7, 8],
+    [7, 7, 7, 7, 7, 8, 8, 9],
+    [8, 8, 8, 8, 8, 9, 9, 9],
+    [9, 9, 9, 9, 9, 9, 9, 9],
 ]
+RULA_TABLE_B_ROWS = [
+    [1, 3, 2, 3, 3, 4, 5, 5, 6, 6, 7, 7],
+    [2, 3, 2, 3, 4, 5, 5, 5, 6, 7, 7, 7],
+    [3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 7],
+    [5, 5, 5, 6, 6, 7, 7, 7, 7, 7, 8, 8],
+    [7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8],
+    [8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9],
+]
+RULA_TABLE_C_ROWS = [
+    [1, 2, 3, 3, 4, 5, 5, 5, 5],
+    [2, 2, 3, 4, 4, 5, 5, 5, 5],
+    [3, 3, 3, 4, 4, 5, 6, 6, 6],
+    [3, 3, 3, 4, 5, 6, 6, 6, 6],
+    [4, 4, 4, 5, 6, 7, 7, 7, 7],
+    [4, 4, 5, 6, 6, 7, 7, 7, 7],
+    [5, 5, 6, 6, 7, 7, 7, 7, 7],
+    [5, 5, 6, 7, 7, 7, 7, 7, 7],
+    [5, 5, 6, 7, 7, 7, 7, 7, 7],
+]
+TABLE_A = {1: {1: {1: {1: 1, 2: 2}, 2: {1: 2, 2: 2}, 3: {1: 2, 2: 3}, 4: {1: 3, 2: 3}}, 2: {1: {1: 2, 2: 2}, 2: {1: 2, 2: 2}, 3: {1: 3, 2: 3}, 4: {1: 3, 2: 3}}, 3: {1: {1: 2, 2: 3}, 2: {1: 3, 2: 3}, 3: {1: 3, 2: 3}, 4: {1: 4, 2: 4}}}, 2: {1: {1: {1: 2, 2: 3}, 2: {1: 3, 2: 3}, 3: {1: 3, 2: 4}, 4: {1: 4, 2: 4}}, 2: {1: {1: 3, 2: 3}, 2: {1: 3, 2: 3}, 3: {1: 3, 2: 4}, 4: {1: 4, 2: 4}}, 3: {1: {1: 3, 2: 4}, 2: {1: 4, 2: 4}, 3: {1: 4, 2: 4}, 4: {1: 5, 2: 5}}}, 3: {1: {1: {1: 3, 2: 3}, 2: {1: 4, 2: 4}, 3: {1: 4, 2: 4}, 4: {1: 5, 2: 5}}, 2: {1: {1: 3, 2: 4}, 2: {1: 4, 2: 4}, 3: {1: 4, 2: 4}, 4: {1: 5, 2: 5}}, 3: {1: {1: 4, 2: 4}, 2: {1: 4, 2: 4}, 3: {1: 4, 2: 5}, 4: {1: 5, 2: 5}}}, 4: {1: {1: {1: 4, 2: 4}, 2: {1: 4, 2: 4}, 3: {1: 4, 2: 5}, 4: {1: 5, 2: 5}}, 2: {1: {1: 4, 2: 4}, 2: {1: 4, 2: 4}, 3: {1: 4, 2: 5}, 4: {1: 5, 2: 5}}, 3: {1: {1: 4, 2: 4}, 2: {1: 4, 2: 5}, 3: {1: 5, 2: 5}, 4: {1: 6, 2: 6}}}, 5: {1: {1: {1: 5, 2: 5}, 2: {1: 5, 2: 5}, 3: {1: 5, 2: 6}, 4: {1: 6, 2: 7}}, 2: {1: {1: 5, 2: 6}, 2: {1: 6, 2: 6}, 3: {1: 6, 2: 6}, 4: {1: 7, 2: 7}}, 3: {1: {1: 6, 2: 6}, 2: {1: 6, 2: 7}, 3: {1: 7, 2: 7}, 4: {1: 7, 2: 8}}}, 6: {1: {1: {1: 7, 2: 7}, 2: {1: 7, 2: 7}, 3: {1: 7, 2: 8}, 4: {1: 8, 2: 9}}, 2: {1: {1: 8, 2: 8}, 2: {1: 8, 2: 8}, 3: {1: 8, 2: 9}, 4: {1: 9, 2: 9}}, 3: {1: {1: 9, 2: 9}, 2: {1: 9, 2: 9}, 3: {1: 9, 2: 9}, 4: {1: 9, 2: 9}}}}
+TABLE_B = {1: {1: {1: 1, 2: 3}, 2: {1: 2, 2: 3}, 3: {1: 3, 2: 4}, 4: {1: 5, 2: 5}, 5: {1: 6, 2: 6}, 6: {1: 7, 2: 7}}, 2: {1: {1: 2, 2: 3}, 2: {1: 2, 2: 3}, 3: {1: 4, 2: 5}, 4: {1: 5, 2: 5}, 5: {1: 6, 2: 7}, 6: {1: 7, 2: 7}}, 3: {1: {1: 3, 2: 3}, 2: {1: 3, 2: 4}, 3: {1: 4, 2: 5}, 4: {1: 5, 2: 6}, 5: {1: 6, 2: 7}, 6: {1: 7, 2: 7}}, 4: {1: {1: 5, 2: 5}, 2: {1: 5, 2: 6}, 3: {1: 6, 2: 7}, 4: {1: 7, 2: 7}, 5: {1: 7, 2: 7}, 6: {1: 8, 2: 8}}, 5: {1: {1: 7, 2: 7}, 2: {1: 7, 2: 7}, 3: {1: 7, 2: 8}, 4: {1: 8, 2: 8}, 5: {1: 8, 2: 8}, 6: {1: 8, 2: 8}}, 6: {1: {1: 8, 2: 8}, 2: {1: 8, 2: 8}, 3: {1: 8, 2: 8}, 4: {1: 8, 2: 9}, 5: {1: 9, 2: 9}, 6: {1: 9, 2: 9}}}
+TABLE_C = [[1, 2, 3, 3, 4, 5, 5, 5, 5], [2, 2, 3, 4, 4, 5, 5, 5, 5], [3, 3, 3, 4, 4, 5, 6, 6, 6], [3, 3, 3, 4, 5, 6, 6, 6, 6], [4, 4, 4, 5, 6, 7, 7, 7, 7], [4, 4, 5, 6, 6, 7, 7, 7, 7], [5, 5, 6, 6, 7, 7, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7, 7, 7], [5, 5, 6, 7, 7, 7, 7, 7, 7]]
+# 注意，Table A/B 的部分數值和個別後來改編的 Excel 工作表可能不同；
+# 本系統採用固定的論文原始表及獨立工作表做可重現的對照，不隨套件版本改變。
 
 # ===== v10.1: 影像內嵌顯示（保留原始比例、不依賴 /media） =====
 def v10_image_html(image_data, caption="", encoded=False, max_width="100%"):
@@ -596,15 +607,19 @@ def v11_update_qc(data, snap, side, side_cap=None, side_frame_idx=None, side_fps
 
 
 def v11_front_fallback_note(qc, data, front_ok, auto_settings):
-    """正面鏡頭失敗時，自動補正條件無法證實；不可偷偷等同於「否」。"""
+    """正面不可用改採作業預設；不把缺少正面當成側面骨架嚴重失敗。
+
+    若側面原本有嚴重 QC 則保留原狀。未觀測的正面補正仍需依作業資訊或
+    局部照片批次修正；但不能自動使全部缺正面樣本進入強制人工複核。
+    """
     front_flags=('is_abducted','is_across_midline','is_out_to_side','is_side_bending','is_neck_side_bending')
     if front_ok or not any(bool(auto_settings.get(x,False)) for x in front_flags):
         return qc
-    qc['品質狀態']='需人工複核'
-    qc['品質可直接採信']=False
-    qc['品質是否列入複核中心']=True
-    qc['品質原因']=str(qc.get('品質原因',''))+'；正面關鍵點不足，自動 RULA 補正項未能確認'
-    qc['品質計分說明']='正面補正條件未確認，這是系統估算結果'
+    if qc.get('品質狀態') == '通過':
+        qc['品質狀態']='留意'
+    # 保留骨架自身的品質可直接採信與列入複核判斷，不因 Front 影格品質而覆蓋。
+    qc['品質原因']=str(qc.get('品質原因',''))+'；正面補正無法影像判斷，沿用分析前的作業設定'
+    qc['品質計分說明']='側面骨架結果照常採用；正面補正來自作業設定，例外可批次修改'
     data.update(qc)
     return qc
 
@@ -1136,7 +1151,7 @@ def compute_rula_full(ua, la, w, wt, nk, tk, lg, m_val, f_val):
     score_b = TABLE_B[nk][tk][lg]
     score_c = score_a + m_val + f_val
     score_d = score_b + m_val + f_val
-    grand_score = TABLE_C[min(score_c, 8) - 1][min(score_d, 7) - 1]
+    grand_score = TABLE_C[min(max(score_c, 1), 9) - 1][min(max(score_d, 1), 9) - 1]
     al_num = 1 if grand_score <= 2 else (2 if grand_score <= 4 else (3 if grand_score <= 6 else 4))
     return score_a, score_b, score_c, score_d, grand_score, f"AL{al_num}"
 
@@ -1381,8 +1396,9 @@ def analyze_front_camera(frame, pose_model, target_side):
         return False, {}
     horiz = shoulder_vec / shoulder_width
     torso_axis = torso_vec / torso_length
-    # 正面旋轉程度以世界座標的肩線深度相對肩寬估計，僅用來降低品質評級。
-    # 此數值不是相機標定或準確率。
+    # 正面旋轉程度以 World 深度差與投影幾何檢查；只要正面視角可疑，
+    # 就不使用該影格的正面自動補正，改用使用者的作業初始設定。
+    # 此檢查不等於已驗證的解剖量角準確性。
     world = getattr(results, "pose_world_landmarks", None)
     rotation_warning = False
     if world is not None:
@@ -1390,6 +1406,20 @@ def analyze_front_camera(frame, pose_model, target_side):
         shoulder_depth_delta = abs(float(wlm[12].z - wlm[11].z))
         shoulder_world_width = float(np.linalg.norm([wlm[12].x-wlm[11].x, wlm[12].y-wlm[11].y, wlm[12].z-wlm[11].z]))
         rotation_warning = shoulder_depth_delta / max(shoulder_world_width, 1e-6) > 0.55
+    # 在明顯轉身、肩線接近重疊、彎腰造成正面投影失真時禁止自動補正。
+    hip_width = float(np.linalg.norm(hp_right - hp_left))
+    shoulder_tilt = math.degrees(math.atan2(abs(shoulder_vec[1]), max(abs(shoulder_vec[0]), 1e-6)))
+    foreshortened = (shoulder_width < 0.48 * torso_length or
+                     (hip_width >= 15 and shoulder_width < 0.65 * hip_width))
+    unreliable_projection = bool(rotation_warning or foreshortened or shoulder_tilt > 22.0)
+    if unreliable_projection:
+        return False, {"front_auto_paused": True,
+                       "front_rotation_warning": bool(rotation_warning),
+                       "front_screening_reason": ("姿勢轉身或正面投影不可靠："
+                           + ("肩深度旋轉；" if rotation_warning else "")
+                           + ("肩線縮短；" if foreshortened else "")
+                           + ("肩線傾斜；" if shoulder_tilt > 22 else "")),
+                       "front_keypoint_visibility": float(np.mean(_visibility_values(results, required))*100.0)}
     # 目標側肩膀位於軸向哪一邊，避免鏡像影像造成左右符號反轉。
     target_sh = xy(sh_idx)
     elbow = xy(el_idx)
@@ -1417,9 +1447,13 @@ def analyze_front_camera(frame, pose_model, target_side):
         "is_across_midline": is_across_midline,
         "is_out_to_side": is_out_to_side,
         "is_side_bending": bool(trunk_lateral_angle > 12.0),
-        "is_neck_side_bending": bool(neck_relative_angle > 14.0),
+        # 已由本批 9 張正面影片核對發現大量假陽性，暫停此項自動加分。
+        # 保留代理角度診斷，但正式分數只採人工事先確認/批次修改。
+        "is_neck_side_bending": False,
         "front_keypoint_visibility": float(np.mean(_visibility_values(results, required)) * 100.0),
         "front_rotation_warning": rotation_warning,
+        "front_auto_paused": False,
+        "front_screening_reason": "正面幾何品質初步通過（非準確率保證）",
         "cross_midline_normalized": round(wrist_midline, 3),
         "trunk_lateral_angle_proxy": round(trunk_lateral_angle, 1),
         "neck_lateral_angle_proxy": round(neck_relative_angle, 1),
@@ -1433,7 +1467,7 @@ V114_NECK_METHOD = (
     "不代表經量角器或標定的頸椎解剖角度。正面或側面視角不佳、頭部旋轉、\n"
     "肩耳髖遮擋都可能造成失真；僅有可見度、比例與幾何品質達標才允許採用。\n"
     "優先使用同側角計分，三點品質不足時以原基準備援並保留診斷原因。\n"
-    "RULA Table A/B/C 尚需標準工作表核對。\n"
+    "RULA Table A/B/C 採固定參考工作表並附逐格測試；角度仍需人工驗證。\n"
 )
 V114_NECK_MODES = (
     "僅比較（維持原本頸角）",
@@ -1567,6 +1601,9 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
     for flag in ("is_abducted", "is_across_midline", "is_out_to_side", "is_side_bending", "is_neck_side_bending"):
         if not auto_selection.get(flag, True):
             front_mods[flag] = bool(manual_front.get(flag, False))
+    # 2026 結案修正：本批驗證 9 張正面推估側彎均無明顯目視依據。
+    # 頸部側彎不再無條件自動 +1，僅依分析前明確設定與之後批次修正。
+    front_mods['is_neck_side_bending'] = bool(manual_front.get('is_neck_side_bending', False))
     # 對於鏡頭轉身造成的視角不佳，保留警告，不把模型 visibility 當準確率。
     orig_h, orig_w = frame.shape[:2]
     scale = min(1000 / max(orig_h, orig_w), 1.0)
@@ -1585,15 +1622,17 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         o_hp, o_kn, o_an, o_hl, o_ft = 24, 26, 28, 30, 32
 
     # 只允許評估指定側；不再因對側 visibility 較高就悄悄換手，避免左右手分數標錯。
-    required = [t_sh, t_el, t_wr, t_ix, t_pk, t_hp, o_sh, o_hp]
+    # 拇指／食指／小指和遠側骨架易遮擋：品質低時使用 Hand 或單側軀幹幾何備援，
+    # 不因為某個手指或世界座標缺失就整張照片剔除。
+    required = [t_sh, t_el, t_wr, t_hp]
     side_pose_start = time.perf_counter()
     results, _, _ = detect_pose_with_fallback(frame_work, pose_model, required)
     side_pose_ms = round((time.perf_counter() - side_pose_start) * 1000.0, 1)
-    if not results or not getattr(results, "pose_landmarks", None) or not getattr(results, "pose_world_landmarks", None):
+    if not results or not getattr(results, "pose_landmarks", None):
         return False, None, frame_work, 0.0
 
     n_lm = results.pose_landmarks.landmark
-    w_lm = results.pose_world_landmarks.landmark
+    w_lm = results.pose_world_landmarks.landmark if getattr(results, 'pose_world_landmarks', None) else None
     if not landmarks_meet_visibility(results, required, threshold=0.25):
         return False, None, frame_work, float(np.mean(_visibility_values(results, required)) * 100.0)
     # 側面常會遮住遠側眼睛／耳朵，改用可見度較高的臉部點，而不是要求兩眼同時可見。
@@ -1607,6 +1646,8 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             return np.array([n_lm[idx].x * work_w, n_lm[idx].y * work_h], dtype=float)
 
         def pt3d(idx):
+            if w_lm is None:
+                return np.array([float('nan')]*3, dtype=float)
             return np.array([w_lm[idx].x, w_lm[idx].y, w_lm[idx].z], dtype=float)
 
         key_vis = _visibility_values(results, required)
@@ -1615,8 +1656,11 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         # 肩關節與前臂角度使用「評估側真實肩點」，避免雙肩加權造成關節頂點偏移。
         # 軀幹與頭頸則用肩／髖中心估算影像投影；不能當作解剖學脊椎角度。
         sh, hp = pt2d(t_sh), pt2d(t_hp)
-        sh_center = (pt2d(t_sh) + pt2d(o_sh)) * 0.5
-        hp_center = (pt2d(t_hp) + pt2d(o_hp)) * 0.5
+        # 遠側肩／髖被遮擋時，直接使用清晰的目標側關節；避免錯誤中點拉偏角度。
+        sh_center = ((pt2d(t_sh) + pt2d(o_sh)) * 0.5
+                     if float(n_lm[o_sh].visibility) >= 0.35 else pt2d(t_sh))
+        hp_center = ((pt2d(t_hp) + pt2d(o_hp)) * 0.5
+                     if float(n_lm[o_hp].visibility) >= 0.35 else pt2d(t_hp))
         ear = pt2d(t_ear) if n_lm[t_ear].visibility >= n_lm[o_ear].visibility else pt2d(o_ear)
         eye_idx = 2 if n_lm[2].visibility >= n_lm[5].visibility else 5
         visible_eye = pt2d(eye_idx)
@@ -1649,7 +1693,8 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
         palm_len_2d = np.linalg.norm(palm_mid_2d - wr)
         raw_wrist_2d = abs(180.0 - calculate_2d_angle(el, wr, palm_mid_2d)) if palm_len_2d > 6.0 else float("nan")
         palm_mid_3d = (w3_ix + w3_pk) * 0.5
-        raw_wrist_3d = abs(180.0 - calculate_3d_angle(w3_el, w3_wr, palm_mid_3d))
+        raw_wrist_3d = (abs(180.0 - calculate_3d_angle(w3_el, w3_wr, palm_mid_3d))
+                        if w_lm is not None else float('nan'))
         # v10：舊版混合角只為研究／回歸比較；絕不再參與正式計分。
         pose_legacy_mixed_angle = (
             float(raw_wrist_2d * 0.6 + raw_wrist_3d * 0.4)
@@ -1900,6 +1945,9 @@ def analyze_side_camera(frame, pose_model, target_side, front_mods, m_val, f_val
             "頸部後仰／伸展": "是（頸部基礎分 4）" if is_neck_extended else "否",
             "自動辨識設定": ", ".join(k for k, v in auto_selection.items() if v) or "未啟用",
             "正面鏡頭轉向提醒": bool(front_mods.get("front_rotation_warning", False)),
+            "正面補正來源": ("沿用分析前人工設定（正面不可靠／缺席）" if front_mods.get("front_auto_paused")
+                              else "正面投影估測＋頸側彎人工設定"),
+            "正面補正品質說明": front_mods.get("front_screening_reason", ""),
             "跨越中線標準化位移": front_mods.get("cross_midline_normalized", np.nan),
             "軀幹側彎代理角度": front_mods.get("trunk_lateral_angle_proxy", np.nan),
             "頸部側彎代理角度": front_mods.get("neck_lateral_angle_proxy", np.nan),
@@ -2734,12 +2782,18 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 if neck_case['需要人工確認'] and neck_choice is None and grand is not None:
                     # 不讓使用者在別處「維持自動評分」繞過共同頸部分級的待確認狀態。
                     status,grand,al='待頸部局部人工確認',None,None
-                elif neck_choice is not None and grand is not None:
-                    # 其他人工修改仍優先保留，僅統一替換頸部分數。
+                elif grand is not None:
+                    # 不論「自動共用」或「人工確認」，都必須重新帶入共同頸分查表。
+                    # 不能只有 CSV 的採用頸部分數改了，Grand Score 卻保留單側舊值。
+                    adopted_neck=(int(neck_choice) if neck_choice is not None
+                                  else int(neck_case['選定共用頸部分數']))
                     manual=overrides.get((side,sid))
                     try:
-                        grand,al=shared_neck_reviewed_score(original,side,int(neck_choice),manual)
-                        status='已確認共同頸部分數'+('／保留其他人工修改' if manual else '')
+                        grand,al=shared_neck_reviewed_score(original,side,adopted_neck,manual)
+                        if neck_choice is not None:
+                            status='已確認共同頸部分數'+('／保留其他人工修改' if manual else '')
+                        elif manual:
+                            status='系統自動共用頸分／保留其他人工修改'
                     except (KeyError,TypeError,ValueError):
                         status,grand,al='頸部重新計分失敗，需人工檢查',None,None
             rows.append({
@@ -2757,11 +2811,14 @@ def v113_build_reviewed_data(side_frames, items, decisions, overrides, legacy=No
                 '結果狀態':status,'使用者選擇':decisions.get(v113_key(sid,side),'未額外指定'),
                 '是否納入可信統計':grand is not None,  # 技術欄名沿用；畫面須明示含系統評分結果
                 '原始品質狀態':(original.get('品質狀態','') if original is not None else '無有效自動評分'),
-                '採用頸部分數':(int(neck_choice) if neck_choice is not None else (neck_case['選定共用頸部分數'] if neck_case and not neck_case['需要人工確認'] else None)),
+                '正面補正來源':(original.get('正面補正來源','') if original is not None else '無有效資料'),
+                '採用頸部分數':(int(neck_choice) if neck_choice is not None else
+                       (neck_case['選定共用頸部分數'] if neck_case and not neck_case['需要人工確認']
+                        else (int(original.get('頸部分數')) if original is not None and neck_case is None and original.get('頸部分數') is not None else None))),
                 '頸部確認狀態':('待人工確認' if neck_case and neck_case['需要人工確認'] and neck_choice is None else ('人工已確認' if neck_choice is not None else ('系統自動共用' if neck_case else '單側評估'))),
             })
     review_df=pd.DataFrame(rows, columns=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','原始Grand Score','原始AL','複核後Grand Score','複核後AL','結果狀態','使用者選擇','是否納入可信統計','原始品質狀態','採用頸部分數','頸部確認狀態','照片補正狀態',
-                  '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分'])
+                  '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源'])
     consolidated=[]
     for sid in sorted(allids):
         side_rows={r['評估側']:r for r in rows if r['樣本編號']==sid}
@@ -2863,6 +2920,7 @@ def v113_manual_form(sample,side,item,source_row):
 
 
 def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions, overrides, legacy=None, neck_cases=None, neck_decisions=None, batch_status=None, batch_audit=None):
+    import json
     """Readable ZIP: clean user CSVs plus optional diagnostic material, original photos untouched."""
     reviewed,combined=v113_build_reviewed_data(side_frames,review_items,decisions,overrides,legacy,neck_cases=neck_cases,neck_decisions=neck_decisions,batch_status=batch_status)
     out=io.BytesIO()
@@ -2947,6 +3005,14 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
             if name not in included:
                 target.writestr(name,content)
                 included.add(name)
+        write_unique('技術診斷/程式與計分版本.json', json.dumps({
+            '系統版本': globals().get('APP_BUILD_TAG','RULA_VERIFIED_TABLES_FRONT_REVIEW_2026-10-30'),
+            '參考RULA工作表':'2016 蕭世平碩士論文 表3-8/3-9/3-10（與標準 RULA 工作表核對）',
+            'Table_A_格數':144,'Table_B_格數':72,'Table_C_格數':81,
+            '頸部側彎':'已停用無驗證的自動側彎加分；採作業設定及照片批次修改',
+            '正面補正':'旋轉/肩線縮短/肩線傾斜時採預設，不視為高精度 AI 認定',
+            '操作注意':'RULA 分數與影像姿勢辨識準確率須另以人工驗證'
+        },ensure_ascii=False,indent=2).encode('utf-8'))
         write_unique('複核後結果/逐側結果.csv',user_report_reviewed(reviewed).to_csv(index=False).encode('utf-8-sig'))
         if batch_audit is not None:
             write_unique('複核後結果/逐張人工補正確認.csv',batch_audit.to_csv(index=False).encode('utf-8-sig'))
@@ -2962,24 +3028,37 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
                     '人工批次修改':('是' if (batch_status or {}).get((side,int(r['樣本編號'])))=='補正已人工確認' else '否')})
         write_unique('評估結果/逐張時段與作業條件.csv',pd.DataFrame(time_rows).to_csv(index=False).encode('utf-8-sig'))
 
-        # A verified component sheet makes post-batch scores auditable. Pending rows stay explicitly pending.
+        # All final reports derive from reviewed single authoritative side result, including
+        # the final shared neck override. Don't export stale pre-neck batch scores.
+        final_index={(int(x['樣本編號']),x['評估側']):x for _,x in reviewed.iterrows()} if not reviewed.empty else {}
         detailed=[]
         for side,df in side_frames.items():
             if not isinstance(df,pd.DataFrame) or df.empty:continue
             pre='右手' if side=='右手側' else '左手'
             for _,r in df.iterrows():
                 sid=int(r['樣本編號']);state=(batch_status or {}).get((side,sid),'補正已確認')
+                final_row=final_index.get((sid,side),{})
+                final_grand=final_row.get('複核後Grand Score')
+                final_neck=final_row.get('採用頸部分數')
+                final_al=final_row.get('複核後AL')
                 detail={'樣本編號':sid,'評估側':side,'頸部角度(°)':r.get('頸部角度'),
                     '頸部角度計算來源':r.get('頸部_v114_計分來源',''),
                     '補正確認狀態':state,
                     '參考側影片時間(秒)':r.get('參考側影片時間(秒)'),
                     '作業條件設定來源':r.get('作業條件設定來源',''),
                     '原始系統總分':r.get('原始自動Grand Score',r.get(pre+' Grand Score')),
-                    '設定後系統總分':r.get(pre+' Grand Score') if not state.startswith('無法確認') else None}
+                    '設定後系統總分':final_grand,
+                    '正式結果狀態':final_row.get('結果狀態','未確認'),
+                    '設定後AL':final_al,
+                    '共同頸部來源':final_row.get('頸部確認狀態',''),
+                    '採用頸部分數':final_neck}
+                manual_components=(overrides or {}).get((side,sid),{})
                 for field,col in [('上臂',pre+'上臂分數'),('前臂',pre+'前臂分數'),
                     ('手腕',pre+'手腕分數'),('腕扭轉',pre+'手腕扭轉分數'),
                     ('頸部','頸部分數'),('軀幹','軀幹分數'),('腿部','腿部分數'),
-                    ('肌肉','肌肉使用加分'),('負重','負重施力加分')]:detail[field+'分數']=r.get(col)
+                    ('肌肉','肌肉使用加分'),('負重','負重施力加分')]:
+                    detail[field+'分數']=(final_neck if field=='頸部' and final_neck is not None
+                        else manual_components.get('人工'+field+'分數',r.get(col)))
                 detailed.append(detail)
         write_unique('複核後結果/照片補正後部位評分.csv',pd.DataFrame(detailed).to_csv(index=False).encode('utf-8-sig'))
         if neck_cases:
@@ -3023,8 +3102,10 @@ def v113_finalize_report_zip(original_zip, side_frames, review_items, decisions,
                     '系統手腕角度(°)':r.get(pre+'手腕角度'),
                     '系統軀幹角度(°)':r.get('軀幹角度'),
                     '系統頸部2D代理角(°)':r.get('頸部角度'),
+                    '正面補正來源':r.get('正面補正來源','未紀錄'),
                     '系統原始系統總分':state.get('原始Grand Score',r.get('原始自動Grand Score',r.get(pre+' Grand Score'))),
                     '系統人工補正後總分':state.get('複核後Grand Score'),
+                    '系統最終採用頸部分數':state.get('採用頸部分數'),
                     '系統人工補正後AL':state.get('複核後AL'),
                     '系統結果狀態':state.get('結果狀態','待判定'),
                     '人工上臂角度(°)':'','人工前臂角度(°)':'',
@@ -3633,7 +3714,7 @@ def user_report_side(df, side, with_scores=False):
         ('參考側影片時間(秒)','參考側影片時間(秒)'),('作業條件設定來源','作業條件設定來源'),
         ('肌肉使用加分','肌肉使用加分'),('負重施力加分','負重施力加分'),
         (f'{prefix} Grand Score','RULA總分'),(f'{prefix} AL','行動等級'),
-        ('品質狀態','品質狀態')]
+        ('品質狀態','品質狀態'),('正面補正來源','正面補正來源')]
     score_map = [(f'{prefix}上臂分數','上臂分數'),(f'{prefix}前臂分數','前臂分數'),
                  (f'{prefix}手腕分數','手腕分數'),(f'{prefix}手腕扭轉分數','手腕扭轉分數'),
                  ('頸部分數','頸部分數'),('軀幹分數','軀幹分數'),('腿部分數','腿部分數'),
@@ -3671,7 +3752,7 @@ def user_report_dual(df, with_scores=False):
         ('作業條件設定來源','作業條件設定來源'),('肌肉使用加分','肌肉使用加分'),
         ('負重施力加分','負重施力加分'),('右手 Grand Score','右手RULA總分'),
         ('左手 Grand Score','左手RULA總分'),('最終最高分','雙側最高分'),
-        ('最終 AL','行動等級'),('最危害側','較高風險側'),('品質狀態','品質狀態')]
+        ('最終 AL','行動等級'),('最危害側','較高風險側'),('品質狀態','品質狀態'),('正面補正來源','正面補正來源')]
     scores=[('右手 Score A','右手Score A'),('左手 Score A','左手Score A'),
             ('右手 Score C','右手Score C'),('左手 Score C','左手Score C')]
     if df is None or df.empty:
@@ -3699,7 +3780,7 @@ def user_report_reviewed(df, combined=False):
         cols=['樣本編號','評估側','頸部角度(°)','頸部角度計算來源','採用頸部分數','頸部確認狀態',
               '原始Grand Score','複核後Grand Score',
               '複核後AL','結果狀態','照片補正狀態','是否納入可信統計','使用者選擇',
-              '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分']
+              '參考側影片時間(秒)','作業條件設定來源','肌肉使用加分','負重施力加分','正面補正來源']
     mapping={'原始Grand Score':'原始總分','複核後Grand Score':'複核後總分',
              '複核後AL':'複核後行動等級','完整雙側AL':'行動等級',
              '完整雙側最高分':'雙側最高分',
@@ -3937,7 +4018,7 @@ AUTO_FLAGS={
     'is_across_midline':'前臂跨越身體中線（正面向量投影）',
     'is_out_to_side':'前臂向外側工作（正面位置）',
     'is_side_bending':'軀幹側彎（肩髖中心線）',
-    'is_neck_side_bending':'頸部側彎（頭頸相對軀幹）',
+    # 由正面影片人工核對發現大量誤判，此項不再列入自動辨識選項。
     'upper_arm_extended':'上臂向後伸展（側面有向角度）',
     'trunk_extended':'軀幹向後伸展（側面有向角度）',
     'neck_extended':'頸部後仰（側面保守估測；不明確時人工設定）',
@@ -3957,10 +4038,13 @@ if not st.session_state.get('_directional_defaults_migrated'):
         st.session_state.v8_values['auto_'+_flag]=True
         st.session_state['_v8_field_auto_'+_flag]=True
     st.session_state['_directional_defaults_migrated']=True
+# 頸部側彎永遠由使用者作業層級設定（一次設定＋批次例外）
+st.session_state.v8_values['auto_is_neck_side_bending'] = False
 for flag in front_labels:
     for side in ('右手側','左手側'):
         v8_value('manual_'+side+'_'+flag,False)
 auto_selection={flag:v8_value('auto_'+flag,True) for flag in AUTO_FLAGS}
+auto_selection['is_neck_side_bending'] = False
 manual_front={(side,flag):v8_value('manual_'+side+'_'+flag,False)
               for side in ('右手側','左手側') for flag in front_labels}
 
@@ -4160,7 +4244,7 @@ elif page == 2:
     st.subheader('自動辨識條件')
     if factory_mode:
         st.warning('沒有正面鏡頭：上臂外展、跨中線、軀幹及頸部側彎等先沿用此頁的人工預設；如果不同照片條件變化，分析後再批次修改。無法確認的情況請勿宣稱為純自動準確評分。')
-        st.caption('上述五項沒有正面影像時停用自動判斷；側面可估測的上臂／軀幹方向仍會逐張使用。')
+        st.caption('正面影像缺席時，正面代理補正會使用分析前設定，仍可用照片批次修改。')
     else:
         st.caption('勾選表示使用影像向量代理判斷；取消後會顯示右側／左側的手動勾選。')
     cols=st.columns(2)
@@ -4171,6 +4255,7 @@ elif page == 2:
             auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,True)
     if factory_mode:
         auto_selection.update({flag:False for flag in front_labels})
+    st.info('頸部側彎：依本次人工比對，舊自動判斷有假陽性，已停用自動加分。整段未見明顯側彎可在下方只確認一次；若部分照片有側彎，再用照片批次修改。')
     with st.expander('無正面影片：人工確認補正' if factory_mode else '僅設定未自動判斷的項目',expanded=True):
         for flag,label in front_labels.items():
             if not auto_selection[flag]:
@@ -4181,7 +4266,7 @@ elif page == 2:
     if factory_mode:
         st.info('沒有正面影片時，相關補正採用此處的預設條件；少數照片若不同，可在分析後批次修改。')
     else:
-        st.caption('影像估測值並不是臨床量測精度；正面鏡頭關鍵點不足時，啟用自動辨識的樣本會被略過。')
+        st.caption('正面轉身、肩線縮短或關鍵點不可靠時，自動補正將採用分析前的人工預設；不會因此丟棄仍可用的側面角度。')
     st.caption('頸部會以同側耳朵、肩膀與髖部計算相對角度；關鍵點不足時使用備援方式並保留診斷紀錄。')
 
 elif page == 3:
@@ -4242,8 +4327,19 @@ def manual_without_front(side_name):
     if not factory_mode or side_name not in rula_eval_sides(eval_mode):
         raise ValueError('無正面模式或評估側別不符')
     # 分析前只是系統計算值；正式採信必須在分析後的照片批次補正中心確認。
-    return {flag:bool(manual_front.get((side_name,flag),False)) for flag in front_labels}
+    defaults = {flag:bool(manual_front.get((side_name,flag),False)) for flag in front_labels}
+    defaults.update({'front_auto_paused':True,'front_screening_reason':'未上傳正面影片：沿用分析前的人工預設',
+                     'front_keypoint_visibility':0.0,'front_rotation_warning':False})
+    return defaults
 
+
+def rula_front_frame_fallback(side_name, reason='正面影像不可用'):
+    """正面自動補正失敗不應阻止仍可運作的側面 RULA 計分。"""
+    base = {flag: bool(manual_front.get((side_name,flag),False)) for flag in front_labels}
+    base.update({'front_auto_paused':True,'front_screening_reason':reason,
+                 'front_rotation_warning':False,'front_keypoint_visibility':0.0,
+                 'neck_lateral_angle_proxy':float('nan'),'trunk_lateral_angle_proxy':float('nan')})
+    return base
 
 # 在非設定頁也必須由保存的資料建立每次分析的選項。
 v6_hand_policy='hand_first'
@@ -4431,7 +4527,10 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                     s_r, r_frame = cap_right.read()
                     s_l, l_frame = cap_left.read()
 
-                    if s_f and s_r and s_l:
+                    # 只因 Front 單張讀取失敗，不可丟掉仍有完整側面影像的姿勢。
+                    if s_r and s_l:
+                        if not s_f:
+                            f_frame = None
                         if raw_image_export:
                             for label, raw in (("Front", f_frame), ("Right", r_frame), ("Left", l_frame)):
                                 if raw is None:
@@ -4441,16 +4540,20 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                                     zip_raw_imgs.append((f"Raw_Frames/{label}/Sample_{i+1:03d}_{sec}s.jpg", payload))
                         # 1. 正面鏡頭分別提取右手與左手的冠狀面外展/交叉補正
                         if is_factory_mode:
-                            front_mods_r= manual_without_front('右手側')
-                            front_mods_l= manual_without_front('左手側')
-                            front_ok_r=front_ok_l=True  # 人工初始系統計算值，尚未按照片確認；不是 AI 偵測到 Front
+                            front_mods_r=manual_without_front('右手側')
+                            front_mods_l=manual_without_front('左手側')
+                            front_ok_r=front_ok_l=False  # 無 Front 不得標記為正面自動辨識成功
+                        elif f_frame is None:
+                            front_ok_r=front_ok_l=False
+                            front_mods_r=rula_front_frame_fallback('右手側','正面單張影格讀取失敗')
+                            front_mods_l=rula_front_frame_fallback('左手側','正面單張影格讀取失敗')
                         else:
                             front_ok_r, front_mods_r = analyze_front_camera(f_frame, pose, "右手側")
                             front_ok_l, front_mods_l = analyze_front_camera(f_frame, pose, "左手側")
                             if not front_ok_r:
-                                front_mods_r = manual_front_fallback()
+                                front_mods_r = rula_front_frame_fallback('右手側', front_mods_r.get('front_screening_reason','正面關鍵點不足'))
                             if not front_ok_l:
-                                front_mods_l = manual_front_fallback()
+                                front_mods_l = rula_front_frame_fallback('左手側', front_mods_l.get('front_screening_reason','正面關鍵點不足'))
 
                         # 2. 右側鏡頭只評估右側關鍵點；低品質正面補正會使該樣本略過，不默認為「否」。
                         succ_r, data_r, img_r, conf_r = analyze_side_camera(
@@ -4473,15 +4576,15 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
 
                         if not succ_r or data_r is None:
                             skipped_right += 1
-                            skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": "右手側", "可能原因": "正面關鍵點不足" if not front_ok_r else "側面關鍵點不足或角度無效"})
+                            skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": "右手側", "可能原因": "側面骨架不足／角度無效（正面補正不可用但不會單獨造成側面失敗）"})
                             v8_add_rejected_sample(rejected_rows,rejected_photos,i+1,sec,"右手側",
-                                "正面關鍵點不足" if not front_ok_r else "側面關鍵點不足或角度無效",
+                                "側面骨架不足／角度無效（正面補正不可用但不會單獨造成側面失敗）",
                                 {"Front":f_frame,"Right":r_frame,"Left":l_frame},pose)
                         if not succ_l or data_l is None:
                             skipped_left += 1
-                            skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": "左手側", "可能原因": "正面關鍵點不足" if not front_ok_l else "側面關鍵點不足或角度無效"})
+                            skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": "左手側", "可能原因": "側面骨架不足／角度無效（正面補正不可用但不會單獨造成側面失敗）"})
                             v8_add_rejected_sample(rejected_rows,rejected_photos,i+1,sec,"左手側",
-                                "正面關鍵點不足" if not front_ok_l else "側面關鍵點不足或角度無效",
+                                "側面骨架不足／角度無效（正面補正不可用但不會單獨造成側面失敗）",
                                 {"Front":f_frame,"Right":r_frame,"Left":l_frame},pose)
 
                         if succ_r and data_r is not None:
@@ -4500,7 +4603,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                             rec_r = {"樣本編號": i + 1, "時間(秒)": sec, "評估側": "右手側", "右側信賴度(%)": round(conf_r, 1)}
                             rec_r.update(data_r)
                             rec_r.update(rula_timeline_video_fields(local_ref_time,timeline_rules,m_val,f_val))
-                            rec_r['正面補正來源']='初始設定（無正面影片，待照片確認）' if is_factory_mode else '正面影像或人工備援'
+                            rec_r['正面補正來源']=data_r.get('正面補正來源','未紀錄')
                             right_only_records.append(rec_r)
 
                             img_r = put_chinese_text(img_r, f"時間: {sec}s | 獨立擷取: 右手側", (15, 15), (0, 255, 255), 20)
@@ -4536,7 +4639,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                             rec_l = {"樣本編號": i + 1, "時間(秒)": sec, "評估側": "左手側", "左側信賴度(%)": round(conf_l, 1)}
                             rec_l.update(data_l)
                             rec_l.update(rula_timeline_video_fields(local_ref_time,timeline_rules,m_val,f_val))
-                            rec_l['正面補正來源']='初始設定（無正面影片，待照片確認）' if is_factory_mode else '正面影像或人工備援'
+                            rec_l['正面補正來源']=data_l.get('正面補正來源','未紀錄')
                             left_only_records.append(rec_l)
 
                             img_l = put_chinese_text(img_l, f"時間: {sec}s | 獨立擷取: 左手側", (15, 15), (0, 255, 255), 20)
@@ -4830,7 +4933,9 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                     s_f, f_frame = cap_front.read() if cap_front is not None else (True,None)
                     s_s, s_frame = cap_side.read()
 
-                    if s_f and s_s:
+                    if s_s:
+                        if not s_f:
+                            f_frame = None  # 正面讀取失敗不使有效側面照片失效
                         if raw_image_export:
                             for label, raw in (("Front", f_frame), ("Right" if target_side == "右手側" else "Left", s_frame)):
                                 if raw is None:
@@ -4839,12 +4944,12 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                                 if payload:
                                     zip_raw_imgs.append((f"Raw_Frames/{label}/Sample_{i+1:03d}_{sec}s.jpg", payload))
                         if cap_front is None:
-                            front_ok = True  # 此值代表人工已確認補正，不代表 AI 看過正面照片。
+                            front_ok = False  # 未上傳正面，不得冒充正面自動判定成功。
                             front_mods = manual_without_front(target_side)
                         else:
                             front_ok, front_mods = analyze_front_camera(f_frame, pose, target_side)
                             if not front_ok:
-                                front_mods = manual_front_fallback()
+                                front_mods = rula_front_frame_fallback(target_side, front_mods.get('front_screening_reason','正面關鍵點不足'))
                         succ_s, data, side_annotated, conf = analyze_side_camera(
                             s_frame, pose, target_side, front_mods, m_at, f_at,
                             manual_mods=build_manual_mods(target_side),
@@ -4852,9 +4957,9 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                         )
                         if not succ_s or data is None:
                             skipped_count += 1
-                            skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": target_side, "可能原因": "正面關鍵點不足" if not front_ok else "側面關鍵點不足或角度無效"})
+                            skip_diagnostics.append({"樣本編號": i+1, "時間(秒)": sec, "評估側": target_side, "可能原因": "側面骨架不足／角度無效（正面補正不可用但不會單獨造成側面失敗）"})
                             v8_add_rejected_sample(rejected_rows,rejected_photos,i+1,sec,target_side,
-                                "正面關鍵點不足" if not front_ok else "側面關鍵點不足或角度無效",
+                                "側面骨架不足／角度無效（正面補正不可用但不會單獨造成側面失敗）",
                                 {"Front":f_frame,"Right" if target_side=="右手側" else "Left":s_frame},pose)
 
                         if succ_s and data is not None:
@@ -4878,8 +4983,7 @@ if page == 4 and st.button("🚀 啟動全關節生物力學分析", type="prima
                             }
                             record.update(data)
                             record.update(rula_timeline_video_fields(local_ref_time,timeline_rules,m_val,f_val))
-                            record['正面補正來源'] = ('初始設定（無正面影片，待照片確認）' if cap_front is None
-                                                     else '正面影像或人工備援')
+                            record['正面補正來源'] = data.get('正面補正來源','未紀錄')
                             records.append(record)
 
                             side_annotated = put_chinese_text(side_annotated, f"時間: {sec}s | 評估側: {target_side}", (15, 15), (0, 255, 255), 20)
