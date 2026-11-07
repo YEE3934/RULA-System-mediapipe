@@ -4100,7 +4100,18 @@ def user_report_wrist(df, side):
 
 # ==================== 【Streamlit 網頁應用介面】 ====================
 st.set_page_config(page_title="RULA 智慧姿勢評估系統", layout="wide")
-st.title("RULA 智慧姿勢評估系統")
+# UI only: 介面風格與排版，不改關節角度／RULA 計分／有效性規則。
+st.markdown("""<style>
+.block-container{max-width:1440px;padding-top:1.4rem;padding-bottom:3rem}
+h1,h2,h3{letter-spacing:.01em}
+[data-testid="stMetric"]{background:rgba(120,150,175,.075);border:1px solid rgba(120,150,175,.16);padding:13px 15px;border-radius:12px}
+[data-testid="stMetricLabel"]{font-weight:600}
+[data-testid="stTabs"] button[role="tab"]{font-weight:650;font-size:.96rem}
+div[data-testid="stVerticalBlockBorderWrapper"]{border-radius:14px}
+[data-testid="stSidebar"]{border-right:1px solid rgba(120,150,175,.16)}
+</style>""",unsafe_allow_html=True)
+st.markdown('## RULA 姿勢風險評估')
+st.caption('影片上傳  ·  人體關鍵點分析  ·  RULA 風險評分  ·  人工覆核')
 with st.sidebar.expander('系統維護資訊', expanded=False):
     st.caption(f"部署識別：{APP_BUILD_TAG}｜程式：{os.path.basename(__file__)}")
 
@@ -4111,9 +4122,8 @@ if not callable(globals().get("add_hand_temporal_notes")):
     st.stop()
 st.caption("自動辨識姿勢與計算 RULA 評分；品質不確定的樣本可檢視原圖、人工評分或剔除。")
 
-st.markdown(
-    "> **系統說明**：本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度，遇到關鍵點可見度不足時會嘗試原圖、對比增強及放大圖；仍不可靠的樣本會略過。RULA 部分影像補正可選擇自動判讀；手腕扭轉、腿足支撐、聳肩、上臂支撐及扭轉等項目仍需人工確認，輸出仍須由受訓評估者複核，不應單獨作為醫療或職安決策依據。"
-)
+with st.expander('使用範圍與評估注意事項',expanded=False):
+    st.info('本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度；可見度不足時會嘗試影像備援。手腕扭轉、腿足支撐等條件仍需人工確認。輸出為人因風險篩檢輔助，不應單獨作為醫療或職安決策依據。')
 
 if "v4_overrides" not in st.session_state:
     st.session_state.v4_overrides = {}
@@ -4267,7 +4277,7 @@ def v9_back_to_setup():
 
 
 with st.sidebar:
-    st.markdown('### RULA 操作導覽')
+    st.markdown('### 操作導覽')
     if st.session_state.v9_screen == 'setup':
         st.session_state['_v8_jump_select'] = V8_STEPS[st.session_state.v8_page_index]
         st.selectbox('快速跳轉設定步驟',V8_STEPS,key='_v8_jump_select',on_change=v8_jump)
@@ -5722,8 +5732,8 @@ if st.session_state.v9_screen == 'results':
     else:
         mode_now = st.session_state.analyzed_mode
         df_show = st.session_state.df_records
-        st.subheader('📊 RULA 分析結果')
-        st.caption('點選下方分頁直接檢視資料，不必再按下一步；如需修改分析設定，可從側邊欄返回。')
+        st.subheader('分析結果')
+        st.caption('先查看影像與風險摘要，再按需要前往覆核、排除紀錄或下載報表。變更設定可從左側導覽返回。')
         _,_,dynamic_neck_cases=batch_current_effective(st.session_state)
         pending_neck=[sid for sid,item in dynamic_neck_cases.items()
                       if item.get('需要人工確認') and sid not in st.session_state.get('shared_neck_decisions',{})]
@@ -5737,13 +5747,36 @@ if st.session_state.v9_screen == 'results':
             st.warning(f'有 {batch_unknown} 筆側別的補正可能影響 RULA 總分，尚待確認；其餘外側工作不確定但總分不變者保留紀錄、不需逐張確認。')
         else:
             st.info('已依影片時段、影像辨識和預設作業條件產生 RULA 評分；僅在條件不同時才需批次修改。')
-        (tab_overview, tab_review, tab_rejected, tab_gallery,
-         tab_reports, tab_download) = st.tabs([
-            '📈 風險總覽', '🔎 異常／人工覆核', '🧩 剔除樣本',
-            '🖼️ 影格照片', '📋 完整報表', '📦 下載',
+        (tab_overview, tab_gallery, tab_review, tab_rejected,
+         tab_reports) = st.tabs([
+            '📊 分析總覽', '🎞️ 逐影格檢視', '🔎 品質與人工覆核',
+            '📂 排除紀錄', '📥 報表與下載',
         ], key='v9_result_tabs', on_change='rerun')
         if tab_overview.open:
             with tab_overview:
+                st.markdown('#### 本次分析快覽')
+                _preview_left, _preview_right = st.columns([1.65,1],gap='large')
+                with _preview_left:
+                    _preview_items = (st.session_state.display_right_b64 or st.session_state.display_left_b64
+                                      or st.session_state.display_images_b64)
+                    if _preview_items:
+                        _sel = st.select_slider('快速查看分析影格', options=list(range(len(_preview_items))),
+                                               value=0,format_func=lambda k:_preview_items[k][0],key='ui_overview_preview_idx')
+                        _pcap,_pimage=_preview_items[_sel]
+                        v10_show_image(_pimage, _pcap, encoded=True)
+                    else:
+                        st.info('本次沒有可顯示的有效骨架照片，請查看排除紀錄。')
+                with _preview_right:
+                    _rt, _rc=v113_current_reports()
+                    _all_reviewed=len(_rt) if isinstance(_rt,pd.DataFrame) else 0
+                    _ok_reviewed=(int(_rt['是否納入可信統計'].fillna(False).sum())
+                                  if isinstance(_rt,pd.DataFrame) and not _rt.empty and '是否納入可信統計' in _rt else 0)
+                    _excluded=len(st.session_state.get('v8_rejected_rows',[]))
+                    st.metric('有效側別評分', _ok_reviewed)
+                    st.metric('排除／品質紀錄', _excluded)
+                    st.caption('左邊是可用的影格預覽；所有影格的詳細角度與骨架資訊請到「逐影格檢視」。')
+                    st.caption('品質紀錄包含不同嚴重度，不代表全部都要人工處理。')
+                st.divider()
                 st.subheader('RULA 風險總覽')
                 info=st.session_state.get('skipped_info',{})
                 st.caption(f'攝影方式：{st.session_state.get("capture_mode","既有模式")}｜跳過影格仍保留於剔除樣本複核。')
@@ -5792,15 +5825,84 @@ if st.session_state.v9_screen == 'results':
                     c.metric('AL3／AL4 比例',f'{effective.ge(5).mean()*100:.1f}%' if not effective.empty else '—')
                     if not effective.empty:
                         st.metric('最高分',int(effective.max()))
-                    if mode_now=='左右側同步計算' and not reviewed_combined.empty:
-                        full=reviewed_combined[reviewed_combined['雙側結果狀態']=='完整雙側有效']
-                        if not full.empty:
-                            st.line_chart(full.set_index('樣本編號')[['完整雙側最高分']],y_label='RULA Grand Score')
-                        st.dataframe(user_report_reviewed(reviewed_combined,combined=True),use_container_width=True,hide_index=True)
-                    elif not reviewed.empty:
-                        st.line_chart(reviewed[reviewed['是否納入可信統計']].set_index('樣本編號')[['複核後Grand Score']],y_label='RULA Grand Score')
+                    # 僅畫出可納入統計的同一批樣本；折線圖和圓餅圖共用資料來源。
+                    # 雙側模式只採完整雙側最高分，避免同一影格被左右側重複計數。
+                    if mode_now == '左右側同步計算':
+                        chart_source = reviewed_combined[
+                            reviewed_combined['雙側結果狀態'] == '完整雙側有效'
+                        ].copy() if not reviewed_combined.empty else pd.DataFrame()
+                        chart_score_col = '完整雙側最高分'
                     else:
-                        st.warning('目前尚無可用的系統評分。')
+                        chart_source = reviewed[
+                            reviewed['是否納入可信統計'].fillna(False)
+                        ].copy() if not reviewed.empty else pd.DataFrame()
+                        chart_score_col = '複核後Grand Score'
+                    if not chart_source.empty and chart_score_col in chart_source.columns:
+                        chart_source = chart_source.copy()
+                        chart_source['RULA Grand Score'] = pd.to_numeric(
+                            chart_source[chart_score_col], errors='coerce'
+                        )
+                        chart_source = chart_source.dropna(subset=['RULA Grand Score'])
+                        chart_source = chart_source[
+                            chart_source['RULA Grand Score'].between(1, 7)
+                        ]
+                        chart_source['RULA Grand Score'] = chart_source['RULA Grand Score'].astype(int)
+                    st.markdown('#### 風險圖表')
+                    chart_type = st.radio(
+                        '切換圖表', ['📈 折線圖', '🥧 圓餅圖'], horizontal=True,
+                        key='ui_rula_risk_chart_type', label_visibility='collapsed',
+                    )
+                    if chart_source.empty:
+                        st.info('目前沒有可納入圖表的有效 RULA 分數。')
+                    elif chart_type == '📈 折線圖':
+                        # 若沒有樣本編號則用順序編號，畫圖而不修改原始資料。
+                        if '樣本編號' not in chart_source.columns:
+                            chart_source['樣本編號'] = range(1, len(chart_source) + 1)
+                        chart_source = chart_source.sort_values('樣本編號')
+                        st.line_chart(
+                            chart_source.set_index('樣本編號')[['RULA Grand Score']],
+                            y_label='RULA Grand Score（1～7）',
+                            x_label='影格樣本編號',
+                        )
+                        st.caption('折線依抽樣影格順序連接，僅呈現抽樣點的分數變化，不等於連續時間的暴露率。')
+                    else:
+                        def _ui_risk_level(score):
+                            return 'AL1｜1–2分' if score <= 2 else (
+                                'AL2｜3–4分' if score <= 4 else (
+                                'AL3｜5–6分' if score <= 6 else 'AL4｜7分'))
+                        counts = chart_source['RULA Grand Score'].map(_ui_risk_level).value_counts()
+                        levels = ['AL1｜1–2分','AL2｜3–4分','AL3｜5–6分','AL4｜7分']
+                        pie_data = pd.DataFrame({
+                            '風險等級': levels,
+                            '影格數': [int(counts.get(level, 0)) for level in levels],
+                        })
+                        pie_data = pie_data[pie_data['影格數'] > 0].copy()
+                        pie_data['比例(%)'] = (pie_data['影格數'] / len(chart_source) * 100).round(1)
+                        st.vega_lite_chart(
+                            pie_data,
+                            {
+                                'mark': {'type': 'arc', 'innerRadius': 55},
+                                'encoding': {
+                                    'theta': {'field': '影格數', 'type': 'quantitative'},
+                                    'color': {'field': '風險等級', 'type': 'nominal',
+                                              'scale': {'domain': levels},
+                                              'legend': {'title': 'RULA 行動等級'}},
+                                    'tooltip': [
+                                        {'field': '風險等級', 'type': 'nominal'},
+                                        {'field': '影格數', 'type': 'quantitative'},
+                                        {'field': '比例(%)', 'type': 'quantitative', 'format': '.1f'},
+                                    ],
+                                },
+                                'view': {'stroke': None},
+                                'height': 300,
+                            },
+                            use_container_width=True,
+                        )
+                        st.caption(f'分母為 {len(chart_source)} 筆可納入統計的有效樣本；比例是影格分布，不是作業時間暴露百分比。')
+                        st.dataframe(pie_data, use_container_width=True, hide_index=True)
+                    if mode_now == '左右側同步計算' and not reviewed_combined.empty:
+                        st.dataframe(user_report_reviewed(reviewed_combined, combined=True),
+                                     use_container_width=True, hide_index=True)
                     st.caption('這裡是可用系統評分的描述性統計，可能包含未逐張人工確認的補正；若品質或頸部分級仍待必要複核會排除。')
                     st.caption('平均數僅作描述性統計，不能取代 RULA 對高風險姿勢的判斷。')
                 st.info('時間欄位說明：「共同時間」以同步事件為 0 秒；「分析經過時間」從取樣開始算 0 秒。若無正面影片，正面視角相關補正由使用者人工確認。')
@@ -5827,7 +5929,7 @@ if st.session_state.v9_screen == 'results':
                 v8_show_rejected_center()
         if tab_gallery.open:
             with tab_gallery:
-                st.subheader('逐影格骨架照片')
+                st.subheader('逐影格檢視')
                 if mode_now=='左右側同步計算':
                     which=st.radio('選擇側別',['右手側','左手側'],horizontal=True,key='v8_gallery_side')
                     images=st.session_state.display_right_b64 if which=='右手側' else st.session_state.display_left_b64
@@ -5874,8 +5976,8 @@ if st.session_state.v9_screen == 'results':
                     st.caption('僅保留評分結果與實際採用角度。更詳細的研發診斷資訊不混入一般報表。')
                 else:
                     st.warning('目前這個報表沒有可用資料，請查看其他類型。')
-        if tab_download.open:
-            with tab_download:
+        if tab_reports.open:
+            with tab_reports:
                 st.subheader('下載評估資料')
                 st.caption('檔名：'+st.session_state.zip_filename)
 
