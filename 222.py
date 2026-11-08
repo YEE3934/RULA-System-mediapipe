@@ -4508,7 +4508,7 @@ elif page == 1:
                 st.success('目前只有一支影片，無須跨鏡頭同步；已使用影片 0 秒作為基準。')
             st.markdown('#### A. 快速自動建議（選用）')
             st.caption('比對所選鏡頭的動作強度曲線；視角不同或重複動作時可能對錯，必須人工預覽確認。')
-            if st.button('✨ 分析動作並建議時間偏移', key='v9_find_motion', use_container_width=True):
+            if st.button('分析動作並進行時間同步, key='v9_find_motion', use_container_width=True):
                 try:
                     with st.spinner('正在以低解析度計算所選影片的動作變化…'):
                         motion = {c:v9_motion_from_bytes(upload_map[c].getvalue()) for c in active_cams}
@@ -4566,7 +4566,7 @@ elif page == 1:
                 begin,end=v9_common_window(meta,anchors_now,active_cams)
                 st.success(f'校正後共同可分析範圍：{begin:+.2f} ～ {end:+.2f} 秒（共 {end-begin:.2f} 秒）')
                 st.caption('共同時間 0 秒是選定的動作事件；負秒代表事件之前。所有鏡頭的採樣時間會各自加上這裡的偏移。')
-                st.button('✅ 所有畫面已對到同一動作，確認同步', key='v9_confirm',
+                st.button('確認同步', key='v9_confirm',
                           on_click=v9_confirm_sync,args=('預覽確認',),type='primary',use_container_width=True)
                 if st.session_state.v9_confirmed and st.session_state.v9_confirmed_signature==sig:
                     st.success('已確認同步，可以按下一步繼續。')
@@ -4671,7 +4671,7 @@ if page == 3:
     st.caption('執行後自動跳到結果總覽；原本的分析及 ZIP 報表功能皆保留。')
 
 # 執行分析按鈕
-if page == 3 and st.button("🚀 啟動全關節生物力學分析", type="primary", use_container_width=True):
+if page == 3 and st.button(" 開始分析 ", type="primary", use_container_width=True):
     is_factory_mode = vid_front_file is None  # 無正面影片；可為單側或雙側評估
     is_dual_mode = eval_mode.startswith('左右側同步計算')
 
