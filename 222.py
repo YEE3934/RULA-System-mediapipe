@@ -4511,7 +4511,7 @@ elif page == 1:
                 st.success('目前只有一支影片，無須跨鏡頭同步；已使用影片 0 秒作為基準。')
             with st.expander('自動建議時間偏移（選用）', expanded=False):
                 st.caption('比對所選鏡頭的動作強度曲線；視角不同或重複動作時可能對錯，必須人工預覽確認。')
-                if st.button('✨ 分析動作並建議時間偏移', key='v9_find_motion', use_container_width=True):
+                if st.button('分析動作並建議時間同步', key='v9_find_motion', use_container_width=True):
                     try:
                         with st.spinner('正在以低解析度計算所選影片的動作變化…'):
                             motion = {c:v9_motion_from_bytes(upload_map[c].getvalue()) for c in active_cams}
@@ -4569,7 +4569,7 @@ elif page == 1:
                 begin,end=v9_common_window(meta,anchors_now,active_cams)
                 st.success(f'校正後共同可分析範圍：{begin:+.2f} ～ {end:+.2f} 秒（共 {end-begin:.2f} 秒）')
                 st.caption('共同時間 0 秒是選定的動作事件；負秒代表事件之前。所有鏡頭的採樣時間會各自加上這裡的偏移。')
-                st.button('✅ 所有畫面已對到同一動作，確認同步', key='v9_confirm',
+                st.button(' 已對到同一動作，確認同步', key='v9_confirm',
                           on_click=v9_confirm_sync,args=('預覽確認',),type='primary',use_container_width=True)
                 if st.session_state.v9_confirmed and st.session_state.v9_confirmed_signature==sig:
                     st.success('已確認同步，可以按下一步繼續。')
@@ -6021,7 +6021,7 @@ if st.session_state.v9_screen == 'results':
                         work_conditions=st.session_state.get('v8_values',{}),
                         )
                     render_blob_download_button(finalized,st.session_state.zip_filename,
-                                                f'📥 下載 {mode_now} 原始＋複核後報表 ZIP')
+                                                f'📥 下載 {mode_now} 報表 ZIP')
                 st.caption('ZIP 的「原始分析」保留首次系統計算結果；「複核後結果」包含沿用設定的系統初始與人工修正結果，並標明來源。未經人工驗證不應稱為準確率。')
 # 只有分析前四步才顯示底部「上一步／下一步」；結果頁使用分頁，不再有步驟按鈕。
 if st.session_state.v9_screen == 'setup':
