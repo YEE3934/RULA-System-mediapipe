@@ -4100,27 +4100,34 @@ def user_report_wrist(df, side):
 
 # ==================== 【Streamlit 網頁應用介面】 ====================
 st.set_page_config(page_title="RULA 智慧姿勢評估系統", layout="wide")
+UI_LAYOUT_BUILD = "UI_REFRESH_2026-11-08"  # 僅用於辨識介面版本，不改分析版本
 # UI only: 介面風格與排版，不改關節角度／RULA 計分／有效性規則。
 st.markdown("""<style>
 .block-container{max-width:1440px;padding-top:1.4rem;padding-bottom:3rem}
 h1,h2,h3{letter-spacing:.01em}
-[data-testid="stMetric"]{background:rgba(120,150,175,.075);border:1px solid rgba(120,150,175,.16);padding:13px 15px;border-radius:12px}
-[data-testid="stMetricLabel"]{font-weight:600}
+[data-testid="stMetric"]{background:rgba(120,150,175,.07);border:1px solid rgba(120,150,175,.18);padding:13px 15px;border-radius:11px;min-height:104px}
+[data-testid="stMetricLabel"]{font-weight:600;letter-spacing:.01em}
+[data-testid="stMetricValue"]{font-weight:700}
+/* 一致的文字起點與寬度；不改動任何輸入元件的值。 */
+.block-container h2,.block-container h3,.block-container h4{text-align:left}
+[data-testid="stExpander"]{border-radius:11px;overflow:hidden}
+[data-testid="stAlert"]{border-radius:10px}
+[data-testid="stTabs"] button[role="tab"]{white-space:nowrap}
 [data-testid="stTabs"] button[role="tab"]{font-weight:650;font-size:.96rem}
 div[data-testid="stVerticalBlockBorderWrapper"]{border-radius:14px}
 [data-testid="stSidebar"]{border-right:1px solid rgba(120,150,175,.16)}
 </style>""",unsafe_allow_html=True)
 st.markdown('## RULA 姿勢風險評估')
-st.caption('影片上傳  ·  人體關鍵點分析  ·  RULA 風險評分  ·  人工覆核')
+st.caption('上傳影片、評估作業姿勢，並在需要時進行人工覆核。')
 with st.sidebar.expander('系統維護資訊', expanded=False):
-    st.caption(f"部署識別：{APP_BUILD_TAG}｜程式：{os.path.basename(__file__)}")
+    st.caption(f"分析識別：{APP_BUILD_TAG}｜介面：{UI_LAYOUT_BUILD}｜程式：{os.path.basename(__file__)}")
 
 # 啟動自檢：顯示實際部署版本並在分析前確認時序檢查函式已可呼叫。
 # Streamlit 會在每次互動時由上到下重跑，因此函式必須在此之前宣告。
 if not callable(globals().get("add_hand_temporal_notes")):
     st.error("部署自檢失敗：add_hand_temporal_notes 未完成定義。請檢查 GitHub 上傳的 222.py 是否完整。")
     st.stop()
-st.caption("自動辨識姿勢與計算 RULA 評分；品質不確定的樣本可檢視原圖、人工評分或剔除。")
+st.caption("系統提供 RULA 初步風險評估；有疑慮的影格可於結果頁查看與修正。")
 
 with st.expander('使用範圍與評估注意事項',expanded=False):
     st.info('本工具以 MediaPipe Pose 關鍵點估算部分姿勢角度；可見度不足時會嘗試影像備援。手腕扭轉、腿足支撐等條件仍需人工確認。輸出為人因風險篩檢輔助，不應單獨作為醫療或職安決策依據。')
@@ -4293,11 +4300,7 @@ with st.sidebar:
 # 頂部只保留藍色進度條與目前步驟；不在頂部重複顯示導覽按鈕。
 if st.session_state.v9_screen == 'setup':
     st.progress((st.session_state.v8_page_index+1)/len(V8_STEPS))
-    st.markdown(
-        f"<div style='text-align:center;font-weight:650;margin:0.45rem 0 1rem 0'>"
-        f"{V8_STEPS[st.session_state.v8_page_index]}</div>",
-        unsafe_allow_html=True,
-    )
+    st.caption(f"設定進度　{st.session_state.v8_page_index + 1} / {len(V8_STEPS)}")
 
 # 重要：參數與上傳檔案無論目前顯示哪個步驟，皆從非 widget 的永久狀態讀取。
 EVAL_OPTIONS=['右手側','左手側','左右側同步計算']
@@ -4402,19 +4405,20 @@ v8_value('job_task', '')
 page=st.session_state.v8_page_index if st.session_state.v9_screen == "setup" else -1
 if page == 0:
     st.subheader('上傳影片與作業設定')
-    st.markdown('#### 作業基本資料（用於匯出檔名與報告識別）')
-    job_a,job_b=st.columns(2)
-    with job_a:
-        v8_widget('date_input','評估日期','job_date',date.today(),format='YYYY/MM/DD')
-        v8_widget('text_input','公司／單位／部門','job_unit','',placeholder='例如：生產部')
-    with job_b:
-        v8_widget('text_input','員工／受測者','job_person','',placeholder='例如：員工A或匿名編號')
-        v8_widget('text_input','作業名稱','job_task','',placeholder='例如：人工搬運作業')
-    st.caption('可留空；未填的資料會在檔名中以「未填寫」標示。若分享 ZIP，建議使用匿名受測者編號。')
+    st.caption('先上傳影片，再設定抽樣數及現場作業條件。詳細設定可以在下方展開。')
+    with st.expander('作業基本資料（選填，用於報告識別）', expanded=False):
+        job_a,job_b=st.columns(2)
+        with job_a:
+            v8_widget('date_input','評估日期','job_date',date.today(),format='YYYY/MM/DD')
+            v8_widget('text_input','公司／單位／部門','job_unit','',placeholder='例如：生產部')
+        with job_b:
+            v8_widget('text_input','員工／受測者','job_person','',placeholder='例如：員工A或匿名編號')
+            v8_widget('text_input','作業名稱','job_task','',placeholder='例如：人工搬運作業')
+        st.caption('可留空；建議使用匿名編號。未填資料在匯出檔名中標示未填寫。')
 
     eval_mode=v8_widget('radio','評估模式','eval_mode',EVAL_OPTIONS[0],options=EVAL_OPTIONS,horizontal=True)
     selected_sides=rula_eval_sides(eval_mode)
-    st.info('正面鏡頭【選填】：建議盡量提供，可協助自動估計外展、跨中線與側彎等補正，通常能減少人工確認。但正面影像不保證角度更準，仍須檢查遮擋與骨架品質。')
+    st.caption('正面影片選填：可輔助部分姿勢補正，但不保證所有關節角度準確。')
     upload_columns=st.columns(1+len(selected_sides))
     with upload_columns[0]:
         vid_front_file=v8_upload('正面鏡頭（選填，建議上傳）','front')
@@ -4425,24 +4429,23 @@ if page == 0:
             else:
                 vid_left_file=v8_upload('左側鏡頭（必要）','left')
     factory_mode = vid_front_file is None
-    d,e,f=st.columns(3)
-    with d: num_samples=v8_widget('slider','抽樣數量','num_samples',25,min_value=5,max_value=100)
-    with e: combo_muscle=v8_widget('selectbox','肌肉使用預設分數','muscle',MUSCLE_OPTIONS[0],options=MUSCLE_OPTIONS)
-    with f: combo_force=v8_widget('selectbox','負重／施力預設分數','force',FORCE_OPTIONS[0],options=FORCE_OPTIONS)
-    with st.expander('📋 肌肉使用／負重｜結案前現場條件確認', expanded=True):
+    st.markdown('#### 抽樣與預設評分條件')
+    with st.container(border=True):
+        d,e,f=st.columns([1.0,1.2,1.2],gap='large')
+        with d: num_samples=v8_widget('slider','抽樣數量','num_samples',25,min_value=5,max_value=100)
+        with e: combo_muscle=v8_widget('selectbox','肌肉使用預設分數','muscle',MUSCLE_OPTIONS[0],options=MUSCLE_OPTIONS)
+        with f: combo_force=v8_widget('selectbox','負重／施力預設分數','force',FORCE_OPTIONS[0],options=FORCE_OPTIONS)
+    with st.expander('現場條件核對｜實際重量、頻率與確認狀態', expanded=True):
         v8_widget('text_input','實際單次負重重量（kg，可填範圍）','actual_load_kg','',
                   placeholder='例如 5 或 4～6；無資料可留空')
         v8_widget('text_input','實際作業重複頻率（次／分鐘）','actual_repetition','',
                   placeholder='例如 5；不確定可留空')
         v8_widget('checkbox','我已依現場條件核對肌肉使用 +0/+1、負重 +0～+3 及影片時段','work_conditions_verified',False)
-        st.caption('勾選僅代表你已核對，不會替你猜測重量或自動改分；未勾選也可試跑，但下載報表會標示「待確認」。')
+        st.caption('此勾選只記錄已核對狀態，不會自動更動分數；未勾選仍可試跑，報表會註記待確認。')
     # 影片時段以必填的「右側／左側原始影片秒數」為準，不使用相對同步秒數。
     with st.expander('🎬 影片時間軸｜拖曳區間設定負重與肌肉使用', expanded=True):
-        st.caption('直接在影片縮圖時間軸選取兩端點，也能新增多組時段、拖曳起點／終點。'
-                   '每段分別設定肌肉使用和負重；其餘秒數沿用上方預設。'
-                   '確認後按「儲存全部區間並套用」。')
-        st.caption('肌肉使用 +1 必須根據靜態姿勢持續超過一分鐘或每分鐘重複超過四次等作業資訊判斷，'
-                   '不是只看一張照片有沒有出力。')
+        st.caption('選取影片時段並設定該區間分數；未設定的秒數沿用上方預設。完成後儲存全部區間。')
+        st.caption('設定不同作業時段時，肌肉使用加分應依現場靜態／重複頻率條件判定，不能僅看單張照片。')
         ref_side_cam='Right' if '右手側' in selected_sides else 'Left'
         ref_file=vid_right_file if ref_side_cam=='Right' else vid_left_file
         ref_title='右側' if ref_side_cam=='Right' else '左側'
@@ -4477,14 +4480,14 @@ if page == 0:
             except (ValueError, OSError, FileNotFoundError) as exc:
                 st.error('影片時間軸載入失敗：'+str(exc))
         st.caption('分析後若只有少數照片的條件不同，仍可使用「照片批次修改」，不必重跑影片。')
-    with st.expander('骨架品質與遮擋篩檢（選用，預設保守）', expanded=False):
+    with st.expander('骨架品質與遮擋篩檢（進階選項，預設保守）', expanded=False):
         v11_qc_policy=v8_widget('selectbox','複核警示敏感度','v11_qc_policy',V11_QC_MODES[0],options=V11_QC_MODES)
         st.caption('只列嚴重疑慮是預設；頭頸與手臂可能重疊時先做幾何及前後影格檢查，仍不可靠才送人工複核。這是品質風險篩檢，不能證明關節實際位置。')
-    st.info('未上傳正面影片：仍可完成所選側的影像角度分析；正面視角無法確定的補正請依現場資訊設定。' if factory_mode else '已提供正面影片：可輔助五項姿勢補正；下一步校正所選鏡頭的共同時間。')
+    st.caption('未上傳正面影片：仍可評估所選側，正面補正需依現場資訊確認。' if factory_mode else '已提供正面影片：下一步校正鏡頭時間。')
 
 elif page == 1:
-    st.subheader('鏡頭時間同步｜只需校正一次')
-    st.caption('只需將所選鏡頭對到同一個動作瞬間，系統自動換算每張影格的時間；影片不需同時開始或等長。')
+    st.subheader('鏡頭時間同步')
+    st.caption('將各鏡頭對到同一個動作瞬間；確認後可沿用此同步設定。')
     active_cams = rula_required_cameras(eval_mode, {'Front':vid_front_file,'Right':vid_right_file,'Left':vid_left_file})
     upload_map = {'Front': vid_front_file,'Right': vid_right_file,'Left': vid_left_file}
     available = all(upload_map[c] is not None for c in active_cams)
@@ -4506,29 +4509,29 @@ elif page == 1:
                 st.session_state.v9_sync_mode = '單鏡頭（不需同步）'
             if len(active_cams) == 1:
                 st.success('目前只有一支影片，無須跨鏡頭同步；已使用影片 0 秒作為基準。')
-            st.markdown('#### A. 快速自動建議（選用）')
-            st.caption('比對所選鏡頭的動作強度曲線；視角不同或重複動作時可能對錯，必須人工預覽確認。')
-            if st.button('分析動作並進行時間同步, key='v9_find_motion', use_container_width=True):
-                try:
-                    with st.spinner('正在以低解析度計算所選影片的動作變化…'):
-                        motion = {c:v9_motion_from_bytes(upload_map[c].getvalue()) for c in active_cams}
-                        st.session_state.v9_auto_suggestion = v9_suggest_anchors(motion,meta,active_cams)
-                except Exception as exc:
-                    st.session_state.v9_auto_suggestion = {'usable':False,'reason':str(exc)}
-            suggestion = st.session_state.get('v9_auto_suggestion')
-            if suggestion:
-                if suggestion.get('usable'):
-                    st.dataframe(pd.DataFrame([{'鏡頭':cam,'建議同步事件秒數':suggestion['anchors'][cam],
-                        '動作相關性':suggestion['pairs'][cam]['correlation'] if cam!=active_cams[0] else 1.0,
-                        '建議可信度':suggestion['pairs'][cam]['confidence'] if cam!=active_cams[0] else '參考鏡頭'}
-                        for cam in active_cams]),hide_index=True,use_container_width=True)
-                    st.warning(suggestion['caution'])
-                    st.button('套用建議秒數，再查看預覽畫面', key='v9_apply_motion',
-                              on_click=v9_apply_auto_suggestion,use_container_width=True)
-                else:
-                    st.info('自動同步不夠可靠：'+suggestion.get('reason','無法估計')+'。請直接使用下方手動對齊。')
-            st.markdown('#### B. 影格預覽與微調')
-            st.caption('找所選影片共有的動作，例如「手第一次碰到物品」。各畫面的時間都指向同一事件時，按「確認同步」。')
+            with st.expander('自動建議時間偏移（選用）', expanded=False):
+                st.caption('比對所選鏡頭的動作強度曲線；視角不同或重複動作時可能對錯，必須人工預覽確認。')
+                if st.button('✨ 分析動作並建議時間偏移', key='v9_find_motion', use_container_width=True):
+                    try:
+                        with st.spinner('正在以低解析度計算所選影片的動作變化…'):
+                            motion = {c:v9_motion_from_bytes(upload_map[c].getvalue()) for c in active_cams}
+                            st.session_state.v9_auto_suggestion = v9_suggest_anchors(motion,meta,active_cams)
+                    except Exception as exc:
+                        st.session_state.v9_auto_suggestion = {'usable':False,'reason':str(exc)}
+                suggestion = st.session_state.get('v9_auto_suggestion')
+                if suggestion:
+                    if suggestion.get('usable'):
+                        st.dataframe(pd.DataFrame([{'鏡頭':cam,'建議同步事件秒數':suggestion['anchors'][cam],
+                            '動作相關性':suggestion['pairs'][cam]['correlation'] if cam!=active_cams[0] else 1.0,
+                            '建議可信度':suggestion['pairs'][cam]['confidence'] if cam!=active_cams[0] else '參考鏡頭'}
+                            for cam in active_cams]),hide_index=True,use_container_width=True)
+                        st.warning(suggestion['caution'])
+                        st.button('套用建議秒數，再查看預覽畫面', key='v9_apply_motion',
+                                  on_click=v9_apply_auto_suggestion,use_container_width=True)
+                    else:
+                        st.info('自動同步不夠可靠：'+suggestion.get('reason','無法估計')+'。請直接使用下方手動對齊。')
+            st.markdown('#### 影格預覽與時間微調')
+            st.caption('找到各影片相同事件，例如第一次接觸物品。預覽確認後按「確認同步」。')
             cols = st.columns(len(active_cams))
             anchors_now = {}
             for col,cam in zip(cols,active_cams):
@@ -4566,7 +4569,7 @@ elif page == 1:
                 begin,end=v9_common_window(meta,anchors_now,active_cams)
                 st.success(f'校正後共同可分析範圍：{begin:+.2f} ～ {end:+.2f} 秒（共 {end-begin:.2f} 秒）')
                 st.caption('共同時間 0 秒是選定的動作事件；負秒代表事件之前。所有鏡頭的採樣時間會各自加上這裡的偏移。')
-                st.button('確認同步', key='v9_confirm',
+                st.button('✅ 所有畫面已對到同一動作，確認同步', key='v9_confirm',
                           on_click=v9_confirm_sync,args=('預覽確認',),type='primary',use_container_width=True)
                 if st.session_state.v9_confirmed and st.session_state.v9_confirmed_signature==sig:
                     st.success('已確認同步，可以按下一步繼續。')
@@ -4578,32 +4581,41 @@ elif page == 1:
                 st.error(f'同步時間沒有有效重疊：{exc}')
 
 elif page == 2:
-    st.subheader('自動辨識條件（預設啟用可用項目）')
+    st.subheader('自動辨識設定')
+    st.caption('確認哪些姿勢條件由影像輔助判定；未更動者維持系統原有預設。')
     if factory_mode:
         st.warning('沒有正面鏡頭：上臂外展、跨中線、軀幹及頸部側彎等先沿用此頁的人工預設；如果不同照片條件變化，分析後再批次修改。無法確認的情況請勿宣稱為純自動準確評分。')
         st.caption('正面影像缺席時，正面代理補正會使用分析前設定，仍可用照片批次修改。')
     else:
         st.caption('勾選表示使用影像向量代理判斷；取消後會顯示右側／左側的手動勾選。')
-    if st.button('一鍵啟用全部可用的自動辨識項目',key='enable_all_safe_automatic'):
+    if st.button('恢復全部可用的自動辨識項目',key='enable_all_safe_automatic'):
         for _flag in AUTO_FLAGS:
             st.session_state.v8_values['auto_'+_flag]=True
             st.session_state['_v8_field_auto_'+_flag]=True
         st.rerun()
-    cols=st.columns(2)
-    for i,(flag,label) in enumerate(AUTO_FLAGS.items()):
-        if factory_mode and flag in front_labels:
-            continue
-        with cols[i%2]:
-            auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,True)
+    with st.container(border=True):
+        st.markdown('**正面視角姿勢補正**' if not factory_mode else '**側面姿勢方向辨識**')
+        cols=st.columns(2)
+        for i,(flag,label) in enumerate(AUTO_FLAGS.items()):
+            if factory_mode and flag in front_labels:
+                continue
+            if (not factory_mode and i == 4):
+                st.markdown('**側面姿勢方向辨識**')
+            with cols[i%2]:
+                auto_selection[flag]=v8_widget('checkbox',label,'auto_'+flag,True)
     if factory_mode:
         auto_selection.update({flag:False for flag in front_labels})
-    st.info('前臂向外側工作：以肩膀＋髖部及肘腕方向共同判斷；只有不確定且可能改變 RULA 分數者，才出現在「異常／人工覆核 → 待確認照片」。')
-    st.info('頸部側彎：舊自動判讀已有假陽性，因此沒有自動加分，也不要求在分析前整批勾選。若某張確實側彎，請在分析後的頸部確認或照片補正頁修改。')
-    st.info('軀幹側彎：有可靠正面影像時仍會以肩／髖中心線做候選自動判定；頸部側彎因原先誤判偏多，仍不採自動加分，初始為「沒有」，可在分析後的「異常／人工覆核 → 頸部確認／照片補正」逐張更改。')
-    st.caption('手腕扭轉、腿足支撐與其他需現場確認的條件，不會宣稱由影片自動辨識。預設使用正常基礎姿勢（各 1 分）；若作業不符，請在分析後照片補正依實際影格修正。')
     if factory_mode:
-        st.warning('未提供正面影片：正面補正無法自動判讀，初始採「沒有」的可修改假設；不是辨識確定沒有。請於照片補正檢查特殊姿勢。')
-    st.caption('頸部會以同側耳朵、肩膀與髖部計算相對角度；關鍵點不足時使用備援方式並保留診斷紀錄。')
+        st.caption('未提供正面影片：正面補正使用可修改的初始假設，不能解讀為系統確認沒有特殊姿勢。')
+    st.caption('頸部側彎、腕扭轉與腿足支撐等條件仍需依現場資料及個別影格確認。')
+    with st.expander('辨識限制與人工覆核說明（詳細）',expanded=False):
+        st.info('前臂向外側工作：以肩膀＋髖部及肘腕方向共同判斷；只有不確定且可能改變 RULA 分數者，才出現在「異常／人工覆核 → 待確認照片」。')
+        st.info('頸部側彎：舊自動判讀已有假陽性，因此沒有自動加分，也不要求在分析前整批勾選。若某張確實側彎，請在分析後的頸部確認或照片補正頁修改。')
+        st.info('軀幹側彎：有可靠正面影像時仍會以肩／髖中心線做候選自動判定；頸部側彎因原先誤判偏多，仍不採自動加分，初始為「沒有」，可在分析後的「異常／人工覆核 → 頸部確認／照片補正」逐張更改。')
+        st.caption('手腕扭轉、腿足支撐與其他需現場確認的條件，不會宣稱由影片自動辨識。預設使用正常基礎姿勢（各 1 分）；若作業不符，請在分析後照片補正依實際影格修正。')
+        if factory_mode:
+            st.warning('未提供正面影片：正面補正無法自動判讀，初始採「沒有」的可修改假設；不是辨識確定沒有。請於照片補正檢查特殊姿勢。')
+        st.caption('頸部會以同側耳朵、肩膀與髖部計算相對角度；關鍵點不足時使用備援方式並保留診斷紀錄。')
 
 def build_manual_mods(side_name):
     is_right = side_name == "右手側"
@@ -4657,21 +4669,26 @@ def rula_front_frame_fallback(side_name, reason='正面影像不可用'):
 v6_hand_policy='hand_first'
 if page == 3:
     st.subheader('啟動分析')
+    st.caption('最後確認影片、同步及 RULA 現場作業條件。')
     ready_files=[name for name,f in [('正面',vid_front_file),('右側',vid_right_file if '右手側' in rula_eval_sides(eval_mode) else None),('左側',vid_left_file if '左手側' in rula_eval_sides(eval_mode) else None)] if f]
-    st.write('已上傳：'+('、'.join(ready_files) if ready_files else '尚未上傳影片'))
-    st.write(f'抽樣數：{num_samples}　｜　分析模式：{eval_mode}　｜　手腕來源：Hand 優先／Pose 2D 備援')
+    with st.container(border=True):
+        st.markdown('**本次分析設定**')
+        st.write('已上傳：'+('、'.join(ready_files) if ready_files else '尚未上傳影片'))
+        st.write(f'抽樣數：{num_samples}　｜　分析模式：{eval_mode}')
+        st.caption('手腕計分：Hand 優先／Pose 2D 備援。')
     if not st.session_state.v8_values.get('work_conditions_verified',False):
         st.warning('肌肉使用／負重尚未核實，請回第 1 步確認；可試跑，但正式報告應保留未核實註記。')
-    st.caption('腿足支撐與手腕扭轉使用正常基礎分數（各 1 分）作為初始假設；這兩項不由影像自動辨識。若實際姿勢不同，請到分析後「照片補正」修改。')
+    with st.expander('初始姿勢假設與覆核提醒',expanded=False):
+        st.caption('腿足支撐與手腕扭轉採正常基礎分數（各 1 分）作為初始假設，不由影像自動辨識。若作業條件不同，請於分析後的照片補正修改。')
     st.write('時間同步：'+('已確認（'+st.session_state.v9_sync_mode+'）' if st.session_state.v9_confirmed else '尚未確認'))
     if not st.session_state.v9_confirmed:
         st.warning('先到「鏡頭時間同步」預覽畫面並確認，否則不會開始分析。')
     if factory_mode:
         st.info('沒有正面影片：使用這裡設定作為系統評分；只有作業階段不同時再多選照片調整，不需逐張確認。')
-    st.caption('執行後自動跳到結果總覽；原本的分析及 ZIP 報表功能皆保留。')
+    st.caption('執行完成後自動開啟分析總覽；原有人工覆核與 ZIP 報表功能保留。')
 
 # 執行分析按鈕
-if page == 3 and st.button(" 開始分析 ", type="primary", use_container_width=True):
+if page == 3 and st.button("啟動 RULA 分析", type="primary", use_container_width=False):
     is_factory_mode = vid_front_file is None  # 無正面影片；可為單側或雙側評估
     is_dual_mode = eval_mode.startswith('左右側同步計算')
 
@@ -5733,179 +5750,177 @@ if st.session_state.v9_screen == 'results':
         mode_now = st.session_state.analyzed_mode
         df_show = st.session_state.df_records
         st.subheader('分析結果')
-        st.caption('先查看影像與風險摘要，再按需要前往覆核、排除紀錄或下載報表。變更設定可從左側導覽返回。')
-        _,_,dynamic_neck_cases=batch_current_effective(st.session_state)
-        pending_neck=[sid for sid,item in dynamic_neck_cases.items()
-                      if item.get('需要人工確認') and sid not in st.session_state.get('shared_neck_decisions',{})]
-        if pending_neck:
-            st.warning(f'有 {len(pending_neck)} 筆頸部姿勢可能改變風險行動等級，尚未確認。請至「異常／人工覆核 → 頸部確認」只確認頸部分數。未確認者不列入可信統計。')
-        if not st.session_state.get('v8_values',{}).get('work_conditions_verified',False):
-            st.warning('尚未確認現場負重與肌肉使用加分；匯出資料將保留「待確認」註記。')
-        _,batch_states,_=batch_current_effective(st.session_state)
-        batch_unknown=sum(x.startswith('無法確認') for x in batch_states.values())
-        if batch_unknown:
-            st.warning(f'有 {batch_unknown} 筆側別的補正可能影響 RULA 總分，尚待確認；其餘外側工作不確定但總分不變者保留紀錄、不需逐張確認。')
+        st.caption('查看影格、分數與風險圖表；需要時再前往品質覆核或匯出。')
+        _, _, dynamic_neck_cases = batch_current_effective(st.session_state)
+        pending_neck = [sid for sid,item in dynamic_neck_cases.items()
+                        if item.get('需要人工確認') and sid not in st.session_state.get('shared_neck_decisions',{})]
+        _, batch_states, _ = batch_current_effective(st.session_state)
+        batch_unknown = sum(x.startswith('無法確認') for x in batch_states.values())
+        reviewed, reviewed_combined = v113_current_reports()
+        _accepted_side = (int(reviewed['是否納入可信統計'].fillna(False).sum())
+                          if isinstance(reviewed,pd.DataFrame) and not reviewed.empty
+                          and '是否納入可信統計' in reviewed.columns else 0)
+        _excluded_count = len(st.session_state.get('v8_rejected_rows',[]))
+        if mode_now == '左右側同步計算':
+            _dual_valid = (reviewed_combined['雙側結果狀態'].eq('完整雙側有效')
+                           if not reviewed_combined.empty else pd.Series(dtype='bool'))
+            effective = (pd.to_numeric(reviewed_combined.loc[_dual_valid,'完整雙側最高分'],errors='coerce').dropna()
+                         if not reviewed_combined.empty else pd.Series(dtype='float64'))
         else:
-            st.info('已依影片時段、影像辨識和預設作業條件產生 RULA 評分；僅在條件不同時才需批次修改。')
+            _valid_rows = reviewed[reviewed['是否納入可信統計'].fillna(False)] if not reviewed.empty else pd.DataFrame()
+            effective = (pd.to_numeric(_valid_rows['複核後Grand Score'],errors='coerce').dropna()
+                         if not _valid_rows.empty else pd.Series(dtype='float64'))
+        # 數值直接讀取既有分析／複核結果；不重新計算 RULA，也不變更納入條件。
+        _stat_cols = st.columns(6, gap='small')
+        _stat_cols[0].metric('抽樣數（設定）', st.session_state.get('v8_values',{}).get('num_samples','—'))
+        _stat_cols[1].metric('可信側別評分', _accepted_side)
+        _stat_cols[2].metric('排除／品質紀錄', _excluded_count)
+        _stat_cols[3].metric('待確認補正', batch_unknown)
+        _stat_cols[4].metric('平均 Grand Score', f'{effective.mean():.2f}' if not effective.empty else '—')
+        _stat_cols[5].metric('最高 Grand Score', int(effective.max()) if not effective.empty else '—')
+        _attention = []
+        if batch_unknown:
+            _attention.append(f'{batch_unknown} 筆補正可能影響總分')
+        if pending_neck:
+            _attention.append(f'{len(pending_neck)} 筆頸部姿勢需確認')
+        if not st.session_state.get('v8_values',{}).get('work_conditions_verified',False):
+            _attention.append('現場肌肉使用／負重尚未核對')
+        if _attention:
+            st.warning('待確認：'+'；'.join(_attention)+'。可至「品質與人工覆核」處理，未確認者依原有規則不列入可信統計。')
         (tab_overview, tab_gallery, tab_review, tab_rejected,
          tab_reports) = st.tabs([
-            '📊 分析總覽', '🎞️ 逐影格檢視', '🔎 品質與人工覆核',
-            '📂 排除紀錄', '📥 報表與下載',
+            '分析總覽', '逐影格檢視', '品質與人工覆核',
+            '排除紀錄', '報表與下載',
         ], key='v9_result_tabs', on_change='rerun')
         if tab_overview.open:
             with tab_overview:
-                st.markdown('#### 本次分析快覽')
-                _preview_left, _preview_right = st.columns([1.65,1],gap='large')
+                _preview_left, _preview_right = st.columns([1.15,1.0], gap='large')
                 with _preview_left:
-                    _preview_items = (st.session_state.display_right_b64 or st.session_state.display_left_b64
-                                      or st.session_state.display_images_b64)
-                    if _preview_items:
-                        _sel = st.select_slider('快速查看分析影格', options=list(range(len(_preview_items))),
-                                               value=0,format_func=lambda k:_preview_items[k][0],key='ui_overview_preview_idx')
-                        _pcap,_pimage=_preview_items[_sel]
-                        v10_show_image(_pimage, _pcap, encoded=True)
-                    else:
-                        st.info('本次沒有可顯示的有效骨架照片，請查看排除紀錄。')
-                with _preview_right:
-                    _rt, _rc=v113_current_reports()
-                    _all_reviewed=len(_rt) if isinstance(_rt,pd.DataFrame) else 0
-                    _ok_reviewed=(int(_rt['是否納入可信統計'].fillna(False).sum())
-                                  if isinstance(_rt,pd.DataFrame) and not _rt.empty and '是否納入可信統計' in _rt else 0)
-                    _excluded=len(st.session_state.get('v8_rejected_rows',[]))
-                    st.metric('有效側別評分', _ok_reviewed)
-                    st.metric('排除／品質紀錄', _excluded)
-                    st.caption('左邊是可用的影格預覽；所有影格的詳細角度與骨架資訊請到「逐影格檢視」。')
-                    st.caption('品質紀錄包含不同嚴重度，不代表全部都要人工處理。')
-                st.divider()
-                st.subheader('RULA 風險總覽')
-                info=st.session_state.get('skipped_info',{})
-                st.caption(f'攝影方式：{st.session_state.get("capture_mode","既有模式")}｜跳過影格仍保留於剔除樣本複核。')
-                with st.expander('查看本次影片時段如何套用到每張照片',expanded=False):
-                    if st.session_state.get('timeline_rules_used'):
-                        st.caption('使用原始側面影片的播放秒數；未指定時段採用分析前預設分數。')
-                        st.dataframe(pd.DataFrame([{'作業階段':x['name'],'開始(秒)':x['start'],
-                            '結束(秒)':x['end'],'肌肉使用加分':x['muscle'],'負重施力加分':x['force']}
-                            for x in st.session_state['timeline_rules_used']]),use_container_width=True,hide_index=True)
-                    else:
-                        st.caption('本次沒有另外指定影片時段，全部採用分析前作業條件。')
-                    frame_map,_,_=batch_current_effective(st.session_state)
-                    rows=[]
-                    for side,df in frame_map.items():
-                        if not isinstance(df,pd.DataFrame) or df.empty:continue
-                        for _,r in df.iterrows():
-                            rows.append({'照片編號':int(r['樣本編號']),'評估側':side,
-                                '側面影片秒數':r.get('參考側影片時間(秒)'),
-                                '肌肉使用':r.get('肌肉使用加分'),'負重／施力':r.get('負重施力加分'),
-                                '設定來源':r.get('作業條件設定來源','預設條件')})
-                    if rows:
-                        st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
-                if st.session_state.get('v9_sync_summary') is not None:
-                    with st.expander('本次鏡頭時間同步結果',expanded=False):
-                        st.dataframe(st.session_state.v9_sync_summary,use_container_width=True,hide_index=True)
-                reviewed, reviewed_combined=v113_current_reports()
-                if (df_show is None or df_show.empty) and reviewed_combined.empty:
-                    st.warning('目前尚無可用系統評分結果；可到「剔除樣本」查看品質或辨識失敗原因。')
-                else:
-                    if mode_now=='左右側同步計算':
-                        if reviewed_combined.empty:
-                            effective=pd.Series(dtype='float64')
+                    with st.container(border=True):
+                        st.markdown('#### 影格預覽')
+                        if mode_now == '左右側同步計算':
+                            _view_side = st.radio('預覽側別',['右手側','左手側'],horizontal=True,
+                                                  key='ui_overview_side')
+                            _preview_items = (st.session_state.display_right_b64 if _view_side=='右手側'
+                                              else st.session_state.display_left_b64)
                         else:
-                            full=reviewed_combined[reviewed_combined['雙側結果狀態']=='完整雙側有效']
-                            effective=pd.to_numeric(full['完整雙側最高分'],errors='coerce').dropna()
-                        st.metric('完整雙側可用評分',len(effective))
-                        left_ok=int(((reviewed['評估側']=='左手側') & (reviewed['是否納入可信統計'])).sum()) if not reviewed.empty else 0
-                        right_ok=int(((reviewed['評估側']=='右手側') & (reviewed['是否納入可信統計'])).sum()) if not reviewed.empty else 0
-                        st.caption(f'側別可用：右側 {right_ok} 筆、左側 {left_ok} 筆。若僅單側可用，完整雙側最高分留空，但該側原始資料與複核結果保留。')
-                    else:
-                        reviewed_ok=reviewed[reviewed['是否納入可信統計']] if not reviewed.empty else pd.DataFrame()
-                        effective=pd.to_numeric(reviewed_ok['複核後Grand Score'],errors='coerce').dropna() if not reviewed_ok.empty else pd.Series(dtype='float64')
-                    a,b,c=st.columns(3)
-                    a.metric('可用系統評分',len(effective))
-                    b.metric('平均 Grand Score',f'{effective.mean():.2f}' if not effective.empty else '—')
-                    c.metric('AL3／AL4 比例',f'{effective.ge(5).mean()*100:.1f}%' if not effective.empty else '—')
-                    if not effective.empty:
-                        st.metric('最高分',int(effective.max()))
-                    # 僅畫出可納入統計的同一批樣本；折線圖和圓餅圖共用資料來源。
-                    # 雙側模式只採完整雙側最高分，避免同一影格被左右側重複計數。
-                    if mode_now == '左右側同步計算':
-                        chart_source = reviewed_combined[
-                            reviewed_combined['雙側結果狀態'] == '完整雙側有效'
-                        ].copy() if not reviewed_combined.empty else pd.DataFrame()
-                        chart_score_col = '完整雙側最高分'
-                    else:
-                        chart_source = reviewed[
-                            reviewed['是否納入可信統計'].fillna(False)
-                        ].copy() if not reviewed.empty else pd.DataFrame()
-                        chart_score_col = '複核後Grand Score'
-                    if not chart_source.empty and chart_score_col in chart_source.columns:
-                        chart_source = chart_source.copy()
-                        chart_source['RULA Grand Score'] = pd.to_numeric(
-                            chart_source[chart_score_col], errors='coerce'
-                        )
-                        chart_source = chart_source.dropna(subset=['RULA Grand Score'])
-                        chart_source = chart_source[
-                            chart_source['RULA Grand Score'].between(1, 7)
-                        ]
-                        chart_source['RULA Grand Score'] = chart_source['RULA Grand Score'].astype(int)
-                    st.markdown('#### 風險圖表')
-                    chart_type = st.radio(
-                        '切換圖表', ['📈 折線圖', '🥧 圓餅圖'], horizontal=True,
-                        key='ui_rula_risk_chart_type', label_visibility='collapsed',
-                    )
-                    if chart_source.empty:
-                        st.info('目前沒有可納入圖表的有效 RULA 分數。')
-                    elif chart_type == '📈 折線圖':
-                        # 若沒有樣本編號則用順序編號，畫圖而不修改原始資料。
-                        if '樣本編號' not in chart_source.columns:
-                            chart_source['樣本編號'] = range(1, len(chart_source) + 1)
-                        chart_source = chart_source.sort_values('樣本編號')
-                        st.line_chart(
-                            chart_source.set_index('樣本編號')[['RULA Grand Score']],
-                            y_label='RULA Grand Score（1～7）',
-                            x_label='影格樣本編號',
-                        )
-                        st.caption('折線依抽樣影格順序連接，僅呈現抽樣點的分數變化，不等於連續時間的暴露率。')
-                    else:
-                        def _ui_risk_level(score):
-                            return 'AL1｜1–2分' if score <= 2 else (
-                                'AL2｜3–4分' if score <= 4 else (
-                                'AL3｜5–6分' if score <= 6 else 'AL4｜7分'))
-                        counts = chart_source['RULA Grand Score'].map(_ui_risk_level).value_counts()
-                        levels = ['AL1｜1–2分','AL2｜3–4分','AL3｜5–6分','AL4｜7分']
-                        pie_data = pd.DataFrame({
-                            '風險等級': levels,
-                            '影格數': [int(counts.get(level, 0)) for level in levels],
-                        })
-                        pie_data = pie_data[pie_data['影格數'] > 0].copy()
-                        pie_data['比例(%)'] = (pie_data['影格數'] / len(chart_source) * 100).round(1)
-                        st.vega_lite_chart(
-                            pie_data,
-                            {
-                                'mark': {'type': 'arc', 'innerRadius': 55},
-                                'encoding': {
-                                    'theta': {'field': '影格數', 'type': 'quantitative'},
-                                    'color': {'field': '風險等級', 'type': 'nominal',
-                                              'scale': {'domain': levels},
-                                              'legend': {'title': 'RULA 行動等級'}},
-                                    'tooltip': [
-                                        {'field': '風險等級', 'type': 'nominal'},
-                                        {'field': '影格數', 'type': 'quantitative'},
-                                        {'field': '比例(%)', 'type': 'quantitative', 'format': '.1f'},
-                                    ],
-                                },
-                                'view': {'stroke': None},
-                                'height': 300,
-                            },
-                            use_container_width=True,
-                        )
-                        st.caption(f'分母為 {len(chart_source)} 筆可納入統計的有效樣本；比例是影格分布，不是作業時間暴露百分比。')
-                        st.dataframe(pie_data, use_container_width=True, hide_index=True)
-                    if mode_now == '左右側同步計算' and not reviewed_combined.empty:
-                        st.dataframe(user_report_reviewed(reviewed_combined, combined=True),
-                                     use_container_width=True, hide_index=True)
-                    st.caption('這裡是可用系統評分的描述性統計，可能包含未逐張人工確認的補正；若品質或頸部分級仍待必要複核會排除。')
-                    st.caption('平均數僅作描述性統計，不能取代 RULA 對高風險姿勢的判斷。')
-                st.info('時間欄位說明：「共同時間」以同步事件為 0 秒；「分析經過時間」從取樣開始算 0 秒。若無正面影片，正面視角相關補正由使用者人工確認。')
+                            _preview_items = st.session_state.display_images_b64
+                        _pcap = None
+                        _sel = 0
+                        if _preview_items:
+                            _sel = st.select_slider('選擇影格', options=list(range(len(_preview_items))),
+                                                    value=0,format_func=lambda k:f"樣本 {k+1}",key='ui_overview_preview_idx',
+                                                    label_visibility='collapsed')
+                            _pcap,_pimage = _preview_items[_sel]
+                            v10_show_image(_pimage, encoded=True)
+                            st.caption(_pcap)
+                        else:
+                            st.info('本次沒有可顯示的有效骨架照片；請查看排除紀錄。')
+                    with st.expander('本次影片時間設定與同步資訊',expanded=False):
+                        st.caption(f'拍攝方式：{st.session_state.get("capture_mode","既有模式")}。共同時間以同步事件為 0 秒；分析經過時間自取樣開始算 0 秒。')
+                        if st.session_state.get('timeline_rules_used'):
+                            st.dataframe(pd.DataFrame([{'作業階段':x['name'],'開始(秒)':x['start'],
+                                '結束(秒)':x['end'],'肌肉使用加分':x['muscle'],'負重施力加分':x['force']}
+                                for x in st.session_state['timeline_rules_used']]),use_container_width=True,hide_index=True)
+                        else:
+                            st.caption('未指定特定時段，沿用分析前作業條件。')
+                        if st.session_state.get('v9_sync_summary') is not None:
+                            st.dataframe(st.session_state.v9_sync_summary,use_container_width=True,hide_index=True)
+                        frame_map,_,_ = batch_current_effective(st.session_state)
+                        _cond_rows=[]
+                        for _side,_df in frame_map.items():
+                            if not isinstance(_df,pd.DataFrame) or _df.empty:continue
+                            for _,_r in _df.iterrows():
+                                _cond_rows.append({'樣本':int(_r['樣本編號']),'側別':_side,
+                                   '側面影片秒數':_r.get('參考側影片時間(秒)'),
+                                   '肌肉使用':_r.get('肌肉使用加分'),
+                                   '負重／施力':_r.get('負重施力加分'),
+                                   '來源':_r.get('作業條件設定來源','預設條件')})
+                        if _cond_rows:
+                            st.dataframe(pd.DataFrame(_cond_rows),use_container_width=True,hide_index=True)
+                with _preview_right:
+                    with st.container(border=True):
+                        st.markdown('#### 當前影格資訊')
+                        if _pcap:
+                            import re as _ui_re
+                            _match = _ui_re.search(r'#(\d+)\s*\(([-+\d.]+)s\)',_pcap)
+                            _score = _ui_re.search(r'總分:\s*(\d+)\s*\((AL\d)\)',_pcap)
+                            _c1,_c2,_c3 = st.columns(3)
+                            _c1.metric('樣本編號',_match.group(1) if _match else str(_sel+1))
+                            _c2.metric('時間戳',f'{_match.group(2)} s' if _match else '—')
+                            _c3.metric('預覽原始分數',f'{_score.group(1)} ({_score.group(2)})' if _score else '—')
+                            st.caption('預覽圖片標示的是分析當時的原始評分；人工修正結果請以複核報表為準。')
+                        else:
+                            st.caption('沒有可供預覽的影格。')
+                    with st.container(border=True):
+                        st.markdown('#### 風險摘要')
+                        _r1,_r2 = st.columns(2)
+                        _r1.metric('可用影格統計',len(effective))
+                        _r2.metric('AL3／AL4 比例',f'{effective.ge(5).mean()*100:.1f}%' if not effective.empty else '—')
+                        _r3,_r4 = st.columns(2)
+                        if mode_now == '左右側同步計算':
+                            _r3.metric('完整雙側有效',len(effective))
+                        else:
+                            _r3.metric('有效側別評分',_accepted_side)
+                        _r4.metric('需確認頸部',len(pending_neck))
+                        st.caption('平均與風險分布僅統計可信樣本；雙側模式使用完整雙側最高分，不重複計數。')
+                    with st.container(border=True):
+                        st.markdown('#### 圖表分析')
+                        # 僅以既有可信統計資料繪圖；圖表切換不觸發影片分析。
+                        if mode_now == '左右側同步計算':
+                            chart_source = reviewed_combined[
+                                reviewed_combined['雙側結果狀態']=='完整雙側有效'
+                            ].copy() if not reviewed_combined.empty else pd.DataFrame()
+                            chart_score_col='完整雙側最高分'
+                        else:
+                            chart_source = reviewed[
+                                reviewed['是否納入可信統計'].fillna(False)
+                            ].copy() if not reviewed.empty else pd.DataFrame()
+                            chart_score_col='複核後Grand Score'
+                        if not chart_source.empty and chart_score_col not in chart_source.columns:
+                            chart_source=pd.DataFrame()
+                        if not chart_source.empty:
+                            chart_source['RULA Grand Score'] = pd.to_numeric(chart_source[chart_score_col],errors='coerce')
+                            chart_source=chart_source.dropna(subset=['RULA Grand Score'])
+                            chart_source=chart_source[chart_source['RULA Grand Score'].between(1,7)].copy()
+                            chart_source['RULA Grand Score']=chart_source['RULA Grand Score'].astype(int)
+                        chart_type=st.radio('圖表類型',['折線圖','圓餅圖'],horizontal=True,
+                                            key='ui_rula_risk_chart_type',label_visibility='collapsed')
+                        if chart_source.empty:
+                            st.info('目前沒有符合可信統計條件的 RULA 分數。')
+                        elif chart_type=='折線圖':
+                            if '樣本編號' not in chart_source.columns:
+                                chart_source['樣本編號']=range(1,len(chart_source)+1)
+                            chart_source=chart_source.sort_values('樣本編號')
+                            st.line_chart(chart_source.set_index('樣本編號')[['RULA Grand Score']],
+                                          x_label='影格樣本編號',y_label='Grand Score',height=245)
+                            st.caption('折線圖連結抽樣影格，不代表連續作業時間的暴露率。')
+                        else:
+                            def _ui_risk_level(score):
+                                return ('AL1｜1–2分' if score<=2 else 'AL2｜3–4分' if score<=4
+                                        else 'AL3｜5–6分' if score<=6 else 'AL4｜7分')
+                            _counts=chart_source['RULA Grand Score'].map(_ui_risk_level).value_counts()
+                            _levels=['AL1｜1–2分','AL2｜3–4分','AL3｜5–6分','AL4｜7分']
+                            _pie_data=pd.DataFrame({'風險等級':_levels,
+                                 '影格數':[int(_counts.get(_level,0)) for _level in _levels]})
+                            _pie_data=_pie_data[_pie_data['影格數']>0].copy()
+                            _pie_data['比例(%)']=(_pie_data['影格數']/len(chart_source)*100).round(1)
+                            st.vega_lite_chart(_pie_data,{'mark':{'type':'arc','innerRadius':55},
+                               'encoding':{'theta':{'field':'影格數','type':'quantitative'},
+                               'color':{'field':'風險等級','type':'nominal',
+                                        'scale':{'domain':_levels},'legend':{'title':'行動等級'}},
+                               'tooltip':[{'field':'風險等級','type':'nominal'},
+                                          {'field':'影格數','type':'quantitative'},
+                                          {'field':'比例(%)','type':'quantitative','format':'.1f'}]},
+                               'view':{'stroke':None},'height':235},use_container_width=True)
+                            st.caption(f'{len(chart_source)} 筆有效影格的分布比例，非時間暴露率。')
+                    with st.expander('完整數據與比較表',expanded=False):
+                        if mode_now == '左右側同步計算' and not reviewed_combined.empty:
+                            st.dataframe(user_report_reviewed(reviewed_combined,combined=True),
+                                         use_container_width=True,hide_index=True)
+                        else:
+                            st.caption('需要檢查單筆角度、補正或原始數據，請至「逐影格檢視」或「報表與下載」。')
+                st.caption('本頁僅重新編排已產生的評分與品質資訊，未更動原始 RULA 計算方式。')
         if tab_review.open:
             with tab_review:
                 review_pending, review_photos, review_neck, review_angles, review_other = st.tabs([
